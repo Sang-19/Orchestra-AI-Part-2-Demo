@@ -1,0 +1,8 @@
+{
+  "name": "Orchestra AI",
+  "description": "Autonomous multi-agent AI research platform with evidence verification, contradiction detection, and RAG knowledge bases.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
