@@ -168,6 +168,28 @@ function initializeSchema(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON session_messages(session_id);
+
+    CREATE TABLE IF NOT EXISTS custom_tools (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      tool_type TEXT NOT NULL DEFAULT 'http_search',
+      category TEXT NOT NULL DEFAULT 'Custom Integration',
+      endpoint_url TEXT NOT NULL,
+      http_method TEXT NOT NULL DEFAULT 'GET',
+      model_name TEXT NOT NULL DEFAULT '',
+      auth_env_var TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_tested_at TEXT,
+      last_test_status TEXT NOT NULL DEFAULT 'untested',
+      last_test_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_custom_tools_user ON custom_tools(user_id);
   `);
 }
 

@@ -15,6 +15,8 @@ import {
   validateResearchInput,
 } from '../orchestrator/stateMachine';
 import type { ClaimRecord, ResearchReport, SourceRecord } from '../../src/types/research';
+import { validateCustomToolInput } from '../tools/customTools';
+import { extractJsonFromModelText } from '../ai/ollamaClient';
 
 test('cleanDocumentText normalizes line endings and collapses excess whitespace', () => {
   const dirty = 'Line one.\r\n\r\n\r\n\r\nLine   two.\u0000';
@@ -175,3 +177,54 @@ test('computeGroundednessFallback flags invalid citations and unsupported claims
   assert.equal(result.passed, false);
   assert.ok(result.citationIssues.some((issue) => issue.includes('[99]')));
 });
+
+test('validateCustomToolInput enforces valid URLs and UPPER_SNAKE_CASE env var references', () => {
+  assert.equal(
+    validateCustomToolInput({
+      name: 'ArXiv Search',
+      toolType: 'http_search',
+      category: 'Academic',
+      endpointUrl: 'https://export.arxiv.org/api/query?search_query={{query}}',
+      httpMethod: 'GET',
+      description: 'Searches ArXiv preprints by topic.',
+      capabilities: ['Preprints'],
+      authEnvVar: 'ARXIV_TOKEN',
+    }).valid,
+    true
+  );
+
+  // Rejects non-HTTP protocols
+  assert.equal(
+    validateCustomToolInput({
+      name: 'Bad Protocol',
+      toolType: 'http_search',
+      category: 'Test',
+      endpointUrl: 'file:///etc/passwd',
+      httpMethod: 'GET',
+      description: 'Should fail validation.',
+      capabilities: [],
+    }).valid,
+    false
+  );
+
+  // Rejects raw secret strings instead of env var names
+  assert.equal(
+    validateCustomToolInput({
+      name: 'Raw Secret Check',
+      toolType: 'webhook_tool',
+      category: 'Test',
+      endpointUrl: 'https://api.example.com/search',
+      httpMethod: 'POST',
+      description: 'Should reject raw secret value in authEnvVar.',
+      capabilities: [],
+      authEnvVar: 'sk-live-raw-secret-1234',
+    }).valid,
+    false
+  );
+});
+
+test('extractJsonFromModelText unwraps fenced or prose-wrapped Ollama JSON', () => {
+  const fenced = 'Here is the result:\n```json\n{"ok":true,"count":3}\n```';
+  assert.deepEqual(JSON.parse(extractJsonFromModelText(fenced)), { ok: true, count: 3 });
+});
+

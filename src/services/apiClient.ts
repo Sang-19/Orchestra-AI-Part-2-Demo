@@ -1,6 +1,8 @@
 import { SseStreamParser } from '../utils/sseParser';
 import type {
   CollectionRecord,
+  CustomToolRecord,
+  CustomToolType,
   DashboardStats,
   DocumentRecord,
   ExecutionEvent,
@@ -10,6 +12,7 @@ import type {
   RetrievalMatch,
   SessionMessage,
   ToolStatus,
+  ToolTestResult,
   User,
   UserSettings,
 } from '../types/research';
@@ -114,7 +117,65 @@ export const apiClient = {
   },
 
   getToolsStatus() {
-    return apiFetch<{ tools: ToolStatus[] }>('/tools/status');
+    return apiFetch<{ tools: ToolStatus[]; customTools: CustomToolRecord[] }>('/tools/status');
+  },
+
+  getCustomTools() {
+    return apiFetch<{ customTools: CustomToolRecord[] }>('/tools/custom');
+  },
+
+  createCustomTool(payload: {
+    name: string;
+    toolType: CustomToolType;
+    category: string;
+    endpointUrl: string;
+    httpMethod: 'GET' | 'POST';
+    modelName?: string;
+    authEnvVar?: string;
+    description: string;
+    capabilities: string[];
+    enabled?: boolean;
+  }) {
+    return apiFetch<{ tool: CustomToolRecord }>('/tools/custom', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateCustomTool(
+    id: string,
+    payload: Partial<{
+      name: string;
+      toolType: CustomToolType;
+      category: string;
+      endpointUrl: string;
+      httpMethod: 'GET' | 'POST';
+      modelName: string;
+      authEnvVar: string;
+      description: string;
+      capabilities: string[];
+      enabled: boolean;
+    }>
+  ) {
+    return apiFetch<{ tool: CustomToolRecord }>(`/tools/custom/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteCustomTool(id: string) {
+    return apiFetch<{ ok: boolean }>(`/tools/custom/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  testCustomTool(id: string) {
+    return apiFetch<{ tool: CustomToolRecord; result: ToolTestResult }>(
+      `/tools/custom/${encodeURIComponent(id)}/test`,
+      {
+        method: 'POST',
+      }
+    );
   },
 
   // Settings & Data

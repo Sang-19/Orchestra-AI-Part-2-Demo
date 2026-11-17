@@ -1,4 +1,9 @@
 import { GoogleGenAI, ThinkingLevel, type Schema } from '@google/genai';
+import {
+  isOllamaProviderEnabled,
+  ollamaEmbedTexts,
+  ollamaGenerateStructuredJson,
+} from './ollamaClient';
 
 let cachedClient: GoogleGenAI | null = null;
 
@@ -53,6 +58,14 @@ export async function generateStructuredJson<T>(params: {
   schema: Schema;
   thinkingLevel?: ThinkingLevel;
 }): Promise<T> {
+  if (isOllamaProviderEnabled()) {
+    return withExponentialBackoff(() =>
+      ollamaGenerateStructuredJson<T>({
+        systemInstruction: params.systemInstruction,
+        prompt: params.prompt,
+      })
+    );
+  }
   const ai = getGeminiClient();
   const response = await withExponentialBackoff(() =>
     ai.models.generateContent({
@@ -120,7 +133,10 @@ export async function embedTexts(texts: string[]): Promise<{
   model: string;
 }> {
   if (texts.length === 0) {
-    return { embeddings: [], model: 'gemini-embedding-2' };
+    return { embeddings: [], model: isOllamaProviderEnabled() ? 'ollama' : 'gemini-embedding-2' };
+  }
+  if (isOllamaProviderEnabled()) {
+    return withExponentialBackoff(() => ollamaEmbedTexts(texts));
   }
   const ai = getGeminiClient();
   const response = await withExponentialBackoff(() =>

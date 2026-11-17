@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { ThinkingLevel, Type, type Schema } from '@google/genai';
 import { generateStructuredJson } from '../ai/geminiClient';
 import { semanticSearch } from '../rag/documentProcessor';
+import { queryEnabledCustomSearchTools } from '../tools/customTools';
 import { searchWeb } from './webSearch';
 import {
   computeGroundednessFallback,
@@ -158,6 +159,32 @@ export async function runSubtopicResearcher(params: {
           `Web search for "${q}" encountered an error: ${err instanceof Error ? err.message : 'unknown'}`
         );
       }
+    }
+  }
+
+  // Invoke any enabled user-generated HTTP search / webhook tools
+  if (queries.length > 0) {
+    const customHits = await queryEnabledCustomSearchTools({
+      userId: params.userId,
+      query: queries[0],
+    });
+    for (const hit of customHits) {
+      collected.push({
+        id: `src-${crypto.randomUUID()}`,
+        citationNumber: citationNum++,
+        title: hit.title,
+        url: hit.url,
+        domain: hit.domain,
+        snippet: hit.snippet,
+        publishedAt: null,
+        sourceType: 'web',
+        subtopicId: params.subtopic.id,
+        credibilityScore: 0.72,
+        credibilityTier: 'secondary',
+        credibilityReasoning: `Retrieved from user-configured tool "${hit.toolName}".`,
+        isOutdated: false,
+        isDuplicate: false,
+      });
     }
   }
 

@@ -280,3 +280,34 @@ export interface ToolStatus {
   description: string;
   capabilities: string[];
 }
+
+export type CustomToolType = 'http_search' | 'ollama_model' | 'webhook_tool' | 'mcp_endpoint';
+
+export interface CustomToolRecord {
+  id: string;
+  userId: string;
+  name: string;
+  toolType: CustomToolType;
+  category: string;
+  endpointUrl: string;
+  httpMethod: 'GET' | 'POST';
+  modelName: string;
+  authEnvVar: string;
+  description: string;
+  capabilities: string[];
+  enabled: boolean;
+  lastTestedAt: string | null;
+  lastTestStatus: 'untested' | 'ok' | 'error';
+  lastTestMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ToolTestResult {
+  ok: boolean;
+  statusCode: number | null;
+  latencyMs: number;
+  message: string;
+  details?: string[];
+}
+

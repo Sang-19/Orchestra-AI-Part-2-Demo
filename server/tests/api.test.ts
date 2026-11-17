@@ -138,6 +138,61 @@ test('API end-to-end: registration, login, user knowledge isolation, collections
     assert.equal(statsData.stats.totalDocuments, 1);
     assert.equal(statsData.stats.totalCollections, 1);
     assert.equal(statsData.stats.totalSessions, 0);
+
+    // 9. User-generated custom tools CRUD & strict user isolation
+    const createToolRes = await fetch(`${baseUrl}/tools/custom`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${dataA.token}`,
+      },
+      body: JSON.stringify({
+        name: 'Local Ollama Llama',
+        toolType: 'ollama_model',
+        category: 'Local LLM',
+        endpointUrl: 'http://localhost:11434',
+        httpMethod: 'POST',
+        modelName: 'llama3.1:8b',
+        description: 'Local Ollama connector for self-hosted runs.',
+        capabilities: ['Offline Inference', 'JSON Mode'],
+        enabled: true,
+      }),
+    });
+    assert.equal(createToolRes.status, 201);
+    const createdTool = (await createToolRes.json()) as { tool: { id: string; enabled: boolean } };
+    assert.equal(createdTool.tool.enabled, true);
+
+    // User B cannot see or delete User A's custom tool
+    const listB = await fetch(`${baseUrl}/tools/custom`, {
+      headers: { Authorization: `Bearer ${dataB.token}` },
+    });
+    const listBData = (await listB.json()) as { customTools: unknown[] };
+    assert.equal(listBData.customTools.length, 0);
+
+    const delB = await fetch(`${baseUrl}/tools/custom/${createdTool.tool.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${dataB.token}` },
+    });
+    assert.equal(delB.status, 404);
+
+    // User A toggles enabled -> false and deletes
+    const updateA = await fetch(`${baseUrl}/tools/custom/${createdTool.tool.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${dataA.token}`,
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(updateA.status, 200);
+    const updatedTool = (await updateA.json()) as { tool: { enabled: boolean } };
+    assert.equal(updatedTool.tool.enabled, false);
+
+    const delA = await fetch(`${baseUrl}/tools/custom/${createdTool.tool.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${dataA.token}` },
+    });
+    assert.equal(delA.status, 200);
   } finally {
     server.close();
     closeDb();

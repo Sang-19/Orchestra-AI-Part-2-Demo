@@ -29,7 +29,16 @@ import {
   sessionBus,
 } from '../orchestrator/workflowEngine';
 import { getGeminiClient, hasGeminiKey, withExponentialBackoff } from '../ai/geminiClient';
+import { getOllamaConfig, isOllamaProviderEnabled } from '../ai/ollamaClient';
 import { hasTavilyKey } from '../orchestrator/webSearch';
+import {
+  createCustomTool,
+  deleteCustomTool,
+  listCustomTools,
+  testCustomToolConnection,
+  updateCustomTool,
+  type CustomToolInput,
+} from '../tools/customTools';
 import type {
   CollectionRecord,
   DashboardStats,
@@ -297,9 +306,11 @@ export function createApiRouter(): express.Router {
     res.json({ stats });
   });
 
-  router.get('/tools/status', requireAuth, (_req: AuthenticatedRequest, res) => {
+  router.get('/tools/status', requireAuth, (req: AuthenticatedRequest, res) => {
     const geminiConfigured = hasGeminiKey();
     const tavilyConfigured = hasTavilyKey();
+    const ollamaEnabled = isOllamaProviderEnabled();
+    const ollamaCfg = getOllamaConfig();
 
     const tools: ToolStatus[] = [
       {
@@ -307,17 +318,33 @@ export function createApiRouter(): express.Router {
         name: 'Google Gemini Reasoning Engine',
         category: 'LLM Orchestration',
         configured: geminiConfigured,
-        mode: 'gemini-4-hydrogen',
+        mode: ollamaEnabled ? 'Standby (LLM_PROVIDER=ollama)' : 'gemini-4-hydrogen',
         description:
           'Powers structured planning, evidence extraction, fact checking, contradiction detection, synthesis, and groundedness validation.',
         capabilities: ['Structured JSON Schemas', 'ThinkingLevel Control', 'Report Synthesis'],
       },
       {
+        id: 'ollama-local-llm',
+        name: 'Ollama Local Model Backend',
+        category: 'Local LLM Orchestration',
+        configured: ollamaEnabled,
+        mode: ollamaEnabled
+          ? `${ollamaCfg.model} @ ${ollamaCfg.baseUrl}`
+          : `Optional (set LLM_PROVIDER=ollama in .env)`,
+        description:
+          'Runs Orchestra AI agents and embeddings against self-hosted local models via Ollama (/api/chat + /api/embed) when self-hosting locally or via Docker.',
+        capabilities: ['Offline Local Inference', 'JSON Format Mode', 'Local Embeddings'],
+      },
+      {
         id: 'gemini-embeddings',
-        name: 'Gemini Vector Embeddings',
+        name: 'Vector Embeddings Engine',
         category: 'Knowledge Retrieval',
-        configured: geminiConfigured,
-        mode: geminiConfigured ? 'gemini-embedding-2' : 'deterministic-v1 fallback',
+        configured: geminiConfigured || ollamaEnabled,
+        mode: ollamaEnabled
+          ? `ollama:${ollamaCfg.embedModel}`
+          : geminiConfigured
+            ? 'gemini-embedding-2'
+            : 'deterministic-v1 fallback',
         description:
           'Generates dense semantic embeddings for uploaded knowledge base documents and query similarity scoring.',
         capabilities: ['Semantic Chunk Indexing', 'Top-K Cosine Retrieval', 'Cross-Format RAG'],
@@ -364,7 +391,57 @@ export function createApiRouter(): express.Router {
       },
     ];
 
-    res.json({ tools });
+    const customTools = listCustomTools(req.user!.id);
+    res.json({ tools, customTools });
+  });
+
+  router.get('/tools/custom', requireAuth, (req: AuthenticatedRequest, res) => {
+    res.json({ customTools: listCustomTools(req.user!.id) });
+  });
+
+  router.post('/tools/custom', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const body = req.body as CustomToolInput;
+      const tool = createCustomTool(req.user!.id, body);
+      res.status(201).json({ tool });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Unable to create custom tool.',
+      });
+    }
+  });
+
+  router.put('/tools/custom/:id', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const tool = updateCustomTool(
+        String(req.params.id),
+        req.user!.id,
+        req.body as Partial<CustomToolInput>
+      );
+      res.json({ tool });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to update custom tool.';
+      res.status(msg.includes('not found') ? 404 : 400).json({ error: msg });
+    }
+  });
+
+  router.delete('/tools/custom/:id', requireAuth, (req: AuthenticatedRequest, res) => {
+    const removed = deleteCustomTool(String(req.params.id), req.user!.id);
+    if (!removed) {
+      res.status(404).json({ error: 'Custom tool not found.' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  router.post('/tools/custom/:id/test', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const outcome = await testCustomToolConnection(String(req.params.id), req.user!.id);
+      res.json(outcome);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Connection test failed.';
+      res.status(msg.includes('not found') ? 404 : 400).json({ error: msg });
+    }
   });
 
   // ---------------- SETTINGS & DATA ----------------

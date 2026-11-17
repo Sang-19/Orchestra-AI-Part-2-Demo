@@ -4,6 +4,7 @@ import mammoth from 'mammoth';
 import { extractText } from 'unpdf';
 import { getDb } from '../db/database';
 import { embedTexts, hasGeminiKey } from '../ai/geminiClient';
+import { isOllamaProviderEnabled } from '../ai/ollamaClient';
 import {
   chunkText,
   cleanDocumentText,
@@ -138,7 +139,7 @@ export async function ingestDocument(params: {
     let vectors: number[][] = [];
     let embeddingModel = 'deterministic-v1';
 
-    if (hasGeminiKey()) {
+    if (hasGeminiKey() || isOllamaProviderEnabled()) {
       try {
         const batchSize = 20;
         for (let i = 0; i < chunks.length; i += batchSize) {
