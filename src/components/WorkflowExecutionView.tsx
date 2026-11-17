@@ -102,6 +102,7 @@ export function WorkflowExecutionView({
             evt.eventType === 'execution_completed' ||
             evt.eventType === 'execution_failed' ||
             evt.eventType === 'agent_completed' ||
+            evt.eventType === 'approval_required' ||
             evt.eventType === 'evidence_discovered' ||
             evt.eventType === 'validation_result' ||
             evt.eventType === 'research_retry'
@@ -111,6 +112,9 @@ export function WorkflowExecutionView({
               .then((fresh) => {
                 if (mounted) {
                   setSession(fresh.session);
+                  if (fresh.session.plan && evt.eventType === 'approval_required') {
+                    setEditablePlan(fresh.session.plan);
+                  }
                   onSessionUpdated();
                 }
               })
@@ -142,17 +146,27 @@ export function WorkflowExecutionView({
     }
   };
 
-  const handleReject = async () => {
+  const handleReject = async (revise = false) => {
     if (!session) return;
     setActionLoading(true);
     setError(null);
     try {
-      const res = await apiClient.rejectPlan(session.id, rejectReason);
+      const res = await apiClient.rejectPlan(session.id, rejectReason, revise);
       setSession(res.session);
+      if (res.session.plan) {
+        setEditablePlan(res.session.plan);
+      }
+      setRejectReason('');
       setShowRejectBox(false);
       onSessionUpdated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reject plan.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : revise
+            ? 'Failed to revise plan.'
+            : 'Failed to reject plan.'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -333,28 +347,38 @@ export function WorkflowExecutionView({
           {showRejectBox && (
             <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-3">
               <label htmlFor="reject-reason" className="block text-xs font-medium text-slate-700">
-                Rejection Reason (optional)
+                Feedback or Rejection Reason
               </label>
               <input
                 id="reject-reason"
                 type="text"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="e.g., Narrow scope to North American regulations"
+                placeholder="e.g., Narrow scope to North American regulations and add cost benchmarks"
                 className="w-full px-3 py-2 text-sm rounded-md border border-slate-300 bg-white"
               />
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowRejectBox(false)}
+                  disabled={actionLoading}
                   className="px-3 py-1.5 text-xs text-slate-600"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleReject}
-                  className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-medium"
+                  onClick={() => handleReject(true)}
+                  disabled={actionLoading}
+                  className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-xs font-medium whitespace-nowrap"
+                >
+                  {actionLoading ? 'Re-planning...' : 'Revise Plan with Feedback'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleReject(false)}
+                  disabled={actionLoading}
+                  className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-medium whitespace-nowrap"
                 >
                   Confirm Rejection
                 </button>

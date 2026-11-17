@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import { ThinkingLevel, Type, type Schema } from '@google/genai';
 import { generateStructuredJson } from '../ai/geminiClient';
-import { semanticSearch } from '../rag/documentProcessor';
-import { queryEnabledCustomSearchTools } from '../tools/customTools';
-import { searchWeb } from './webSearch';
+import {
+  executeSubtopicToolSuite,
+  formatResearchReportTool,
+} from '../tools/researchTools';
 import {
   computeGroundednessFallback,
-  renderReportMarkdown,
   sanitizeUntrustedText,
 } from './stateMachine';
 import type {
@@ -53,15 +53,19 @@ export async function runPlannerAgent(params: {
   mode: ResearchMode;
   includeWeb: boolean;
   includeRag: boolean;
+  feedback?: string | null;
 }): Promise<ResearchPlan> {
   const subtopicCount = params.mode === 'deep' ? 4 : 3;
+  const feedbackBlock = params.feedback?.trim()
+    ? `\n\nHuman Reviewer Revision Feedback (MUST incorporate into the revised plan):\n"${params.feedback.trim()}"`
+    : '';
   const plan = await generateStructuredJson<ResearchPlan>({
     systemInstruction:
       'You are the Planner Agent in Orchestra AI. Decompose the research question into concrete, actionable subtopics with targeted web/knowledge search queries and potential epistemic difficulties. Output strict JSON.',
     prompt: `Research Question: "${params.question}"
 Mode: ${params.mode}
 Web Search Enabled: ${params.includeWeb}
-Knowledge Base RAG Enabled: ${params.includeRag}
+Knowledge Base RAG Enabled: ${params.includeRag}${feedbackBlock}
 
 Generate ${subtopicCount} non-overlapping subtopics (ids: sub-1, sub-2, ...). Each subtopic should have 1-2 focused searchQueries and 2-3 requiredInformation items. Priority must be "high", "medium", or "low".`,
     schema: PLAN_SCHEMA,
@@ -90,109 +94,17 @@ export async function runSubtopicResearcher(params: {
   extraQueries?: string[];
   startingCitationNumber: number;
 }): Promise<{ sources: SourceRecord[]; gaps: string[] }> {
-  const queries = Array.from(
-    new Set([...params.subtopic.searchQueries, ...(params.extraQueries ?? [])])
-  ).slice(0, 3);
-
-  const collected: SourceRecord[] = [];
-  const gaps: string[] = [];
-  let citationNum = params.startingCitationNumber;
-
-  if (params.includeRag) {
-    for (const q of queries) {
-      const ragHits = await semanticSearch({
-        userId: params.userId,
-        query: q,
-        collectionIds: params.collectionIds.length > 0 ? params.collectionIds : undefined,
-        topK: 3,
-      });
-      for (const hit of ragHits) {
-        if (hit.score < 0.12) continue;
-        collected.push({
-          id: `src-${crypto.randomUUID()}`,
-          citationNumber: citationNum++,
-          title: `${hit.filename} (Chunk #${hit.chunkIndex + 1})`,
-          url: `kb://${hit.documentId}#chunk-${hit.chunkIndex}`,
-          domain: 'Internal Knowledge Base',
-          snippet: sanitizeUntrustedText(hit.content, 1100),
-          publishedAt: null,
-          sourceType: 'document',
-          subtopicId: params.subtopic.id,
-          credibilityScore: 0.85,
-          credibilityTier: 'primary',
-          credibilityReasoning: 'Pending source credibility assessment.',
-          isOutdated: false,
-          isDuplicate: false,
-        });
-      }
-    }
-  }
-
-  if (params.includeWeb) {
-    for (const q of queries.slice(0, 2)) {
-      try {
-        const webHits = await searchWeb({
-          query: q,
-          objective: params.objective,
-          maxResults: 3,
-        });
-        for (const w of webHits) {
-          collected.push({
-            id: `src-${crypto.randomUUID()}`,
-            citationNumber: citationNum++,
-            title: w.title,
-            url: w.url,
-            domain: w.domain,
-            snippet: w.snippet,
-            publishedAt: w.publishedAt,
-            sourceType: 'web',
-            subtopicId: params.subtopic.id,
-            credibilityScore: 0.7,
-            credibilityTier: 'secondary',
-            credibilityReasoning: 'Pending source credibility assessment.',
-            isOutdated: false,
-            isDuplicate: false,
-          });
-        }
-      } catch (err) {
-        gaps.push(
-          `Web search for "${q}" encountered an error: ${err instanceof Error ? err.message : 'unknown'}`
-        );
-      }
-    }
-  }
-
-  // Invoke any enabled user-generated HTTP search / webhook tools
-  if (queries.length > 0) {
-    const customHits = await queryEnabledCustomSearchTools({
-      userId: params.userId,
-      query: queries[0],
-    });
-    for (const hit of customHits) {
-      collected.push({
-        id: `src-${crypto.randomUUID()}`,
-        citationNumber: citationNum++,
-        title: hit.title,
-        url: hit.url,
-        domain: hit.domain,
-        snippet: hit.snippet,
-        publishedAt: null,
-        sourceType: 'web',
-        subtopicId: params.subtopic.id,
-        credibilityScore: 0.72,
-        credibilityTier: 'secondary',
-        credibilityReasoning: `Retrieved from user-configured tool "${hit.toolName}".`,
-        isOutdated: false,
-        isDuplicate: false,
-      });
-    }
-  }
-
-  if (collected.length === 0) {
-    gaps.push(`No strong sources retrieved for subtopic "${params.subtopic.title}".`);
-  }
-
-  return { sources: collected, gaps };
+  return executeSubtopicToolSuite({
+    userId: params.userId,
+    objective: params.objective,
+    subtopicId: params.subtopic.id,
+    subtopicTitle: params.subtopic.title,
+    queries: [...params.subtopic.searchQueries, ...(params.extraQueries ?? [])],
+    includeWeb: params.includeWeb,
+    includeRag: params.includeRag,
+    collectionIds: params.collectionIds,
+    startingCitationNumber: params.startingCitationNumber,
+  });
 }
 
 const CLAIMS_SCHEMA: Schema = {
@@ -585,10 +497,16 @@ export async function runWriterAgent(params: {
   sources: SourceRecord[];
   reportTone: string;
   citationStyle: string;
+  rewriteInstructions?: string[];
 }): Promise<ResearchReport> {
   const sourceIndex = params.sources
     .map((s) => `[${s.citationNumber}] ${s.title} (${s.url}) — Credibility ${s.credibilityTier} (${Math.round(s.credibilityScore * 100)}%)`)
     .join('\n');
+
+  const rewriteBlock =
+    params.rewriteInstructions && params.rewriteInstructions.length > 0
+      ? `\n\nMandatory Groundedness Revision Directives (fix every listed unsupported statement or citation issue):\n${params.rewriteInstructions.map((line) => `- ${line}`).join('\n')}`
+      : '';
 
   const base = await generateStructuredJson<
     Omit<ResearchReport, 'topicAnalysis' | 'markdownContent' | 'generatedAt'>
@@ -605,7 +523,7 @@ Contradictions:
 ${JSON.stringify(params.contradictions)}
 
 Sources Index:
-${sourceIndex}`,
+${sourceIndex}${rewriteBlock}`,
     schema: WRITER_SCHEMA,
     thinkingLevel: ThinkingLevel.HIGH,
   });
@@ -618,7 +536,7 @@ ${sourceIndex}`,
 
   return {
     ...fullBase,
-    markdownContent: renderReportMarkdown({
+    markdownContent: formatResearchReportTool({
       report: fullBase,
       sources: params.sources,
       contradictions: params.contradictions,

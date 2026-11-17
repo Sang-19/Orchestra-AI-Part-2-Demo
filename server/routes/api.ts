@@ -21,6 +21,7 @@ import {
 import {
   approveResearchPlan,
   createAndPlanResearch,
+  deleteResearchSessionAndThread,
   getResearchSession,
   getUserSettings,
   mapSessionRow,
@@ -370,14 +371,24 @@ export function createApiRouter(): express.Router {
         capabilities: ['Live Web Citations', 'Automatic Grounding Fallback', 'URI Extraction'],
       },
       {
+        id: 'langgraph-orchestrator',
+        name: 'LangGraph StateGraph Orchestrator',
+        category: 'Multi-Agent Workflow',
+        configured: true,
+        mode: 'StateGraph + Send() + Command + interrupt()',
+        description:
+          'Central LangGraph state machine coordinating parallel subtopic Send() fan-out, interrupt-based human approval, conditional retries, and ToolNode dispatch.',
+        capabilities: ['Parallel Send() Branches', 'Interrupt Human Approval', 'Conditional Command Routing'],
+      },
+      {
         id: 'sqlite-store',
-        name: 'SQLite Checkpoint & Vector Store',
+        name: 'SQLite LangGraph Checkpointer & Vector Store',
         category: 'Persistence & Memory',
         configured: true,
-        mode: 'WAL Mode Durable Storage',
+        mode: 'WAL Mode Durable Checkpointer',
         description:
-          'Stores durable multi-agent checkpoints, execution event logs, user-isolated document vectors, and research history.',
-        capabilities: ['Restart Recovery', 'User Knowledge Isolation', 'Audit Event Replay'],
+          'Persists LangGraph thread checkpoints separately from user-isolated RAG document vectors, surviving backend restarts cleanly.',
+        capabilities: ['LangGraph Thread Persistence', 'User Thread Isolation', 'Restart Recovery'],
       },
       {
         id: 'doc-parsers',
@@ -837,12 +848,9 @@ export function createApiRouter(): express.Router {
     res.json({ session, events });
   });
 
-  router.delete('/research/:id', requireAuth, (req: AuthenticatedRequest, res) => {
-    const db = getDb();
-    const info = db
-      .prepare(`DELETE FROM research_sessions WHERE id = ? AND user_id = ?`)
-      .run(req.params.id, req.user!.id);
-    if (info.changes === 0) {
+  router.delete('/research/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const deleted = await deleteResearchSessionAndThread(String(req.params.id), req.user!.id);
+    if (!deleted) {
       res.status(404).json({ error: 'Research session not found.' });
       return;
     }
@@ -865,13 +873,14 @@ export function createApiRouter(): express.Router {
     }
   });
 
-  router.post('/research/:id/reject', requireAuth, (req: AuthenticatedRequest, res) => {
+  router.post('/research/:id/reject', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const { reason } = req.body as { reason?: string };
-      const session = rejectResearchPlan({
+      const { reason, revise } = req.body as { reason?: string; revise?: boolean };
+      const session = await rejectResearchPlan({
         sessionId: String(req.params.id),
         userId: req.user!.id,
         reason,
+        revise: Boolean(revise),
       });
       res.json({ session });
     } catch (err) {
@@ -881,9 +890,9 @@ export function createApiRouter(): express.Router {
     }
   });
 
-  router.post('/research/:id/resume', requireAuth, (req: AuthenticatedRequest, res) => {
+  router.post('/research/:id/resume', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const session = resumeResearchExecution({
+      const session = await resumeResearchExecution({
         sessionId: String(req.params.id),
         userId: req.user!.id,
       });

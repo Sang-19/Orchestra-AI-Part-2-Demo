@@ -2,6 +2,53 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        try {
+          var desc = Object.getOwnPropertyDescriptor(window, 'fetch');
+          if (desc && typeof desc.get === 'function' && !desc.set && desc.configurable) {
+            Object.defineProperty(window, 'fetch', {
+              get: desc.get,
+              set: function () {},
+              enumerable: desc.enumerable !== false,
+              configurable: true,
+            });
+          }
+        } catch (_) {}
+
+        function isExtensionError(filename, stack) {
+          var src = String(filename || '') + '\n' + String(stack || '');
+          return (
+            src.indexOf('chrome-extension://') !== -1 ||
+            src.indexOf('moz-extension://') !== -1 ||
+            src.indexOf('safari-extension://') !== -1
+          );
+        }
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (isExtensionError(event.filename, event.error && event.error.stack)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event.reason;
+            if (isExtensionError('', reason && reason.stack)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Orchestra AI — Autonomous Research Platform</title>
     <meta name="description" content="Autonomous multi-agent AI research platform with evidence verification, contradiction detection, and RAG knowledge bases." />

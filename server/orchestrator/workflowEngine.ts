@@ -1,24 +1,19 @@
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { Command } from '@langchain/langgraph';
 import { getDb } from '../db/database';
+import { createInitialCheckpoint, validateResearchInput } from './stateMachine';
 import {
-  createInitialCheckpoint,
-  evaluateAdaptiveRetryDecision,
-  renderReportMarkdown,
-  validateResearchInput,
-} from './stateMachine';
+  projectGraphStateToCheckpoint,
+  type HumanApprovalResumePayload,
+  type OrchestraGraphState,
+} from './graphState';
 import {
-  runContradictionCheckerAgent,
-  runEvidenceExtractionAgent,
-  runFactCheckerAgent,
-  runGroundednessCheckerAgent,
-  runPlannerAgent,
-  runQualityEvaluatorAgent,
-  runSourceCredibilityAgent,
-  runSubtopicResearcher,
-  runSummarizerAgent,
-  runWriterAgent,
-} from './agents';
+  createOrchestraResearchGraph,
+  type GraphAgentDependencies,
+  type GraphEventPayload,
+} from './researchGraph';
+import { getSqliteCheckpointer } from './sqliteCheckpointer';
 import type {
   AgentId,
   ExecutionEvent,
@@ -38,14 +33,16 @@ class SessionEventBus extends EventEmitter {
 
 export const sessionBus = new SessionEventBus();
 const activeRuns = new Set<string>();
+let customAgentOverrides: Partial<GraphAgentDependencies> | undefined;
 
-function appendExecutionEvent(params: {
-  sessionId: string;
-  eventType: ExecutionEvent['eventType'];
-  agentId: AgentId | null;
-  message: string;
-  payload?: Record<string, unknown> | null;
-}): ExecutionEvent {
+/**
+ * Optional dependency injection hook used by deterministic integration tests.
+ */
+export function setWorkflowAgentOverrides(overrides?: Partial<GraphAgentDependencies>): void {
+  customAgentOverrides = overrides;
+}
+
+function appendExecutionEvent(params: GraphEventPayload): ExecutionEvent {
   const db = getDb();
   const now = new Date().toISOString();
   const row = db
@@ -81,7 +78,7 @@ function appendExecutionEvent(params: {
   return evt;
 }
 
-function saveCheckpoint(params: {
+function saveSessionProjection(params: {
   sessionId: string;
   status: ResearchStatus;
   checkpoint: WorkflowCheckpoint;
@@ -122,6 +119,26 @@ function saveCheckpoint(params: {
   );
 }
 
+function buildWorkflowGraph() {
+  return createOrchestraResearchGraph({
+    checkpointer: getSqliteCheckpointer(),
+    agents: customAgentOverrides,
+    onEvent: (evt) => {
+      appendExecutionEvent(evt);
+    },
+  });
+}
+
+function makeThreadConfig(sessionId: string, userId: string) {
+  return {
+    configurable: {
+      thread_id: sessionId,
+      user_id: userId,
+    },
+    recursionLimit: 60,
+  };
+}
+
 export function getUserSettings(userId: string): UserSettings {
   const db = getDb();
   const row = db
@@ -144,9 +161,7 @@ export function getUserSettings(userId: string): UserSettings {
 
   if (!row) {
     const now = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO user_settings (user_id, updated_at) VALUES (?, ?)`
-    ).run(userId, now);
+    db.prepare(`INSERT INTO user_settings (user_id, updated_at) VALUES (?, ?)`).run(userId, now);
     return {
       userId,
       defaultMode: 'standard',
@@ -204,7 +219,9 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
     checkpoint: row.checkpoint_json
       ? (JSON.parse(String(row.checkpoint_json)) as WorkflowCheckpoint)
       : null,
-    report: row.report_json ? (JSON.parse(String(row.report_json)) as ResearchSession['report']) : null,
+    report: row.report_json
+      ? (JSON.parse(String(row.report_json)) as ResearchSession['report'])
+      : null,
     groundedness: row.groundedness_json
       ? (JSON.parse(String(row.groundedness_json)) as ResearchSession['groundedness'])
       : null,
@@ -217,6 +234,98 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+/**
+ * Streams a LangGraph invocation or resumption while projecting each state transition
+ * into `research_sessions` for real-time API & frontend visibility.
+ */
+async function runGraphStreamAndSync(params: {
+  sessionId: string;
+  userId: string;
+  input: Record<string, unknown> | Command | null;
+}): Promise<void> {
+  const graph = buildWorkflowGraph();
+  const config = makeThreadConfig(params.sessionId, params.userId);
+  let latestState: OrchestraGraphState | null = null;
+
+  try {
+    const stream = await graph.stream(params.input as never, {
+      ...config,
+      streamMode: 'values',
+    });
+
+    for await (const snapshot of stream) {
+      latestState = snapshot as unknown as OrchestraGraphState;
+      if (latestState && latestState.sessionId) {
+        const projected = projectGraphStateToCheckpoint(latestState);
+        saveSessionProjection({
+          sessionId: params.sessionId,
+          status: latestState.status,
+          checkpoint: projected,
+          errorMessage: latestState.errorMessage,
+        });
+      }
+    }
+
+    const finalSnapshot = await graph.getState(config);
+    const finalValues = (finalSnapshot.values as OrchestraGraphState | undefined) ?? latestState;
+    if (!finalValues) return;
+
+    const projected = projectGraphStateToCheckpoint(finalValues);
+    const isPausedAtInterrupt =
+      Array.isArray(finalSnapshot.next) && finalSnapshot.next.includes('human_approval');
+
+    if (isPausedAtInterrupt) {
+      saveSessionProjection({
+        sessionId: params.sessionId,
+        status: 'awaiting_approval',
+        checkpoint: {
+          ...projected,
+          currentStep: 'human_approval',
+        },
+        errorMessage: null,
+      });
+      return;
+    }
+
+    const terminalStatus: ResearchStatus =
+      finalValues.status === 'rejected' ||
+      finalValues.status === 'completed' ||
+      finalValues.status === 'completed_with_warnings' ||
+      finalValues.status === 'failed'
+        ? finalValues.status
+        : 'completed';
+
+    saveSessionProjection({
+      sessionId: params.sessionId,
+      status: terminalStatus,
+      checkpoint: projected,
+      completedAt: new Date().toISOString(),
+      errorMessage: finalValues.errorMessage,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unexpected LangGraph execution error.';
+    const current = getResearchSession(params.sessionId, params.userId);
+    const checkpoint =
+      (latestState ? projectGraphStateToCheckpoint(latestState) : current?.checkpoint) ??
+      createInitialCheckpoint(params.sessionId, current?.maxRetries ?? 2);
+
+    saveSessionProjection({
+      sessionId: params.sessionId,
+      status: 'failed',
+      checkpoint,
+      completedAt: new Date().toISOString(),
+      errorMessage: message,
+    });
+
+    appendExecutionEvent({
+      sessionId: params.sessionId,
+      eventType: 'execution_failed',
+      agentId: checkpoint.currentStep,
+      message,
+    });
+  }
 }
 
 export async function createAndPlanResearch(params: {
@@ -247,7 +356,7 @@ export async function createAndPlanResearch(params: {
   const db = getDb();
   const sessionId = `res-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
-  const checkpoint = createInitialCheckpoint(sessionId, maxRetries);
+  const initialCheckpoint = createInitialCheckpoint(sessionId, maxRetries);
 
   db.prepare(`
     INSERT INTO research_sessions (
@@ -263,445 +372,45 @@ export async function createAndPlanResearch(params: {
     includeRag ? 1 : 0,
     JSON.stringify(collectionIds),
     maxRetries,
-    JSON.stringify(checkpoint),
+    JSON.stringify(initialCheckpoint),
     now,
     now,
     now
   );
 
-  appendExecutionEvent({
+  // Execute LangGraph from START until it pauses at the `human_approval` interrupt()
+  await runGraphStreamAndSync({
     sessionId,
-    eventType: 'execution_started',
-    agentId: 'input_validation',
-    message: 'Input validated and research workflow initialized.',
-  });
-
-  checkpoint.completedAgents.push('input_validation');
-  checkpoint.currentStep = 'planner';
-  saveCheckpoint({ sessionId, status: 'planning', checkpoint });
-
-  appendExecutionEvent({
-    sessionId,
-    eventType: 'agent_started',
-    agentId: 'planner',
-    message: 'Planner Agent decomposing research question into structured subtopics.',
-  });
-
-  try {
-    const plan = await runPlannerAgent({
+    userId: params.userId,
+    input: {
+      sessionId,
+      userId: params.userId,
       question: params.question.trim(),
       mode,
       includeWeb,
       includeRag,
-    });
-
-    checkpoint.plan = plan;
-    checkpoint.completedAgents.push('planner');
-    checkpoint.currentStep = 'human_approval';
-    saveCheckpoint({ sessionId, status: 'awaiting_approval', checkpoint });
-
-    appendExecutionEvent({
-      sessionId,
-      eventType: 'agent_completed',
-      agentId: 'planner',
-      message: `Generated ${plan.subtopics.length}-subtopic research plan.`,
-      payload: { subtopicCount: plan.subtopics.length },
-    });
-
-    appendExecutionEvent({
-      sessionId,
-      eventType: 'approval_required',
-      agentId: 'human_approval',
-      message: 'Workflow paused at Human Approval checkpoint. Review and approve the plan to execute.',
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Planner Agent failed.';
-    saveCheckpoint({
-      sessionId,
-      status: 'failed',
-      checkpoint,
-      completedAt: new Date().toISOString(),
-      errorMessage: msg,
-    });
-    appendExecutionEvent({
-      sessionId,
-      eventType: 'execution_failed',
-      agentId: 'planner',
-      message: msg,
-    });
-  }
+      collectionIds,
+      maxRetries,
+      groundednessThreshold: settings.groundednessThreshold,
+      reportTone: settings.reportTone,
+      citationStyle: settings.citationStyle,
+    },
+  });
 
   return getResearchSession(sessionId, params.userId)!;
 }
 
-export function startWorkflowExecutionAsync(params: {
+function dispatchLangGraphResumeAsync(params: {
   sessionId: string;
   userId: string;
+  input: Command | null;
 }): void {
   if (activeRuns.has(params.sessionId)) return;
   activeRuns.add(params.sessionId);
 
-  void executeWorkflowFromCheckpoint(params.sessionId, params.userId).finally(() => {
+  void runGraphStreamAndSync(params).finally(() => {
     activeRuns.delete(params.sessionId);
   });
-}
-
-async function executeWorkflowFromCheckpoint(sessionId: string, userId: string): Promise<void> {
-  const session = getResearchSession(sessionId, userId);
-  if (!session || !session.checkpoint || !session.plan) return;
-
-  const checkpoint = session.checkpoint;
-  const settings = getUserSettings(userId);
-  let extraQueries: string[] = [];
-
-  try {
-    while (true) {
-      // 1. Research Coordinator & Parallel Researchers
-      checkpoint.currentStep = 'research_coordinator';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'research_coordinator',
-        message: `Coordinating parallel research across ${session.plan.subtopics.length} subtopics (cycle ${checkpoint.retryCount + 1}).`,
-      });
-
-      checkpoint.currentStep = 'researcher';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'researcher',
-        message: 'Executing parallel web search and knowledge base retrieval.',
-      });
-
-      let citationOffset = checkpoint.sources.length + 1;
-      const parallelResults = await Promise.all(
-        session.plan.subtopics.map((subtopic, idx) =>
-          runSubtopicResearcher({
-            userId,
-            objective: session.plan!.objective,
-            subtopic,
-            includeWeb: session.includeWeb,
-            includeRag: session.includeRag,
-            collectionIds: session.collectionIds,
-            extraQueries: idx === 0 ? extraQueries : [],
-            startingCitationNumber: citationOffset + idx * 10,
-          })
-        )
-      );
-
-      const newlyGathered = parallelResults.flatMap((r) => r.sources);
-      const existingUrls = new Set(checkpoint.sources.map((s) => s.url));
-      for (const src of newlyGathered) {
-        if (!existingUrls.has(src.url)) {
-          src.citationNumber = checkpoint.sources.length + 1;
-          checkpoint.sources.push(src);
-          existingUrls.add(src.url);
-        }
-      }
-
-      if (!checkpoint.completedAgents.includes('research_coordinator')) {
-        checkpoint.completedAgents.push('research_coordinator');
-      }
-      if (!checkpoint.completedAgents.includes('researcher')) {
-        checkpoint.completedAgents.push('researcher');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'evidence_discovered',
-        agentId: 'researcher',
-        message: `Collected ${checkpoint.sources.length} total sources across Knowledge Base and web.`,
-        payload: { sourceCount: checkpoint.sources.length },
-      });
-
-      // 2. Evidence Extraction
-      checkpoint.currentStep = 'evidence_extraction';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'evidence_extraction',
-        message: 'Extracting atomic factual claims and preserving supporting passages.',
-      });
-
-      checkpoint.claims = await runEvidenceExtractionAgent({
-        objective: session.plan.objective,
-        sources: checkpoint.sources,
-      });
-      if (!checkpoint.completedAgents.includes('evidence_extraction')) {
-        checkpoint.completedAgents.push('evidence_extraction');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'evidence_extraction',
-        message: `Extracted ${checkpoint.claims.length} attributed claims.`,
-        payload: { claimCount: checkpoint.claims.length },
-      });
-
-      // 3. Fact Checker
-      checkpoint.currentStep = 'fact_checker';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'fact_checker',
-        message: 'Comparing claims against source passages and assigning calibrated confidence scores.',
-      });
-
-      checkpoint.claims = await runFactCheckerAgent({
-        claims: checkpoint.claims,
-        sources: checkpoint.sources,
-      });
-      if (!checkpoint.completedAgents.includes('fact_checker')) {
-        checkpoint.completedAgents.push('fact_checker');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'fact_checker',
-        message: `Fact-checked ${checkpoint.claims.length} claims.`,
-      });
-
-      // 4. Source Credibility
-      checkpoint.currentStep = 'source_credibility';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'source_credibility',
-        message: 'Grading source authority, primary vs. secondary status, and publication recency.',
-      });
-
-      checkpoint.sources = await runSourceCredibilityAgent(checkpoint.sources);
-      if (!checkpoint.completedAgents.includes('source_credibility')) {
-        checkpoint.completedAgents.push('source_credibility');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'source_credibility',
-        message: `Evaluated credibility for ${checkpoint.sources.length} sources.`,
-      });
-
-      // 5. Contradiction Checker
-      checkpoint.currentStep = 'contradiction_checker';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'contradiction_checker',
-        message: 'Detecting and preserving conflicting claims across retrieved evidence.',
-      });
-
-      checkpoint.contradictions = await runContradictionCheckerAgent({
-        claims: checkpoint.claims,
-        sources: checkpoint.sources,
-      });
-      if (!checkpoint.completedAgents.includes('contradiction_checker')) {
-        checkpoint.completedAgents.push('contradiction_checker');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'contradiction_checker',
-        message: `Identified and preserved ${checkpoint.contradictions.length} contradictions/tensions.`,
-      });
-
-      // 6. Summarizer
-      checkpoint.currentStep = 'summarizer';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'summarizer',
-        message: 'Synthesizing topic-wise findings and knowledge gaps.',
-      });
-
-      checkpoint.topicSummaries = await runSummarizerAgent({
-        plan: session.plan,
-        claims: checkpoint.claims,
-        sources: checkpoint.sources,
-        contradictions: checkpoint.contradictions,
-      });
-      if (!checkpoint.completedAgents.includes('summarizer')) {
-        checkpoint.completedAgents.push('summarizer');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'summarizer',
-        message: `Structured ${checkpoint.topicSummaries.length} topic syntheses.`,
-      });
-
-      // 7. Writer
-      checkpoint.currentStep = 'writer';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'writer',
-        message: 'Drafting multi-section cited research report.',
-      });
-
-      checkpoint.report = await runWriterAgent({
-        question: session.question,
-        plan: session.plan,
-        topicSummaries: checkpoint.topicSummaries,
-        claims: checkpoint.claims,
-        contradictions: checkpoint.contradictions,
-        sources: checkpoint.sources,
-        reportTone: settings.reportTone,
-        citationStyle: settings.citationStyle,
-      });
-      if (!checkpoint.completedAgents.includes('writer')) {
-        checkpoint.completedAgents.push('writer');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_completed',
-        agentId: 'writer',
-        message: 'Completed full research report draft with inline citations.',
-      });
-
-      // 8. Groundedness Checker
-      checkpoint.currentStep = 'groundedness_checker';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'groundedness_checker',
-        message: 'Auditing report statements and citations against verified claims.',
-      });
-
-      checkpoint.groundedness = await runGroundednessCheckerAgent({
-        report: checkpoint.report,
-        claims: checkpoint.claims,
-        sources: checkpoint.sources,
-        threshold: settings.groundednessThreshold,
-      });
-      // Refresh markdown banner with groundedness verification status
-      checkpoint.report.markdownContent = renderReportMarkdown({
-        report: checkpoint.report,
-        sources: checkpoint.sources,
-        contradictions: checkpoint.contradictions,
-        groundedness: checkpoint.groundedness,
-      });
-
-      if (!checkpoint.completedAgents.includes('groundedness_checker')) {
-        checkpoint.completedAgents.push('groundedness_checker');
-      }
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'validation_result',
-        agentId: 'groundedness_checker',
-        message: checkpoint.groundedness.summary,
-        payload: {
-          passed: checkpoint.groundedness.passed,
-          score: checkpoint.groundedness.score,
-        },
-      });
-
-      // 9. Research Quality Evaluator & Adaptive Retry Decision
-      checkpoint.currentStep = 'quality_evaluator';
-      saveCheckpoint({ sessionId, status: 'running', checkpoint });
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'agent_started',
-        agentId: 'quality_evaluator',
-        message: 'Evaluating overall completeness and deciding whether adaptive retry is required.',
-      });
-
-      checkpoint.quality = await runQualityEvaluatorAgent({
-        question: session.question,
-        plan: session.plan,
-        claims: checkpoint.claims,
-        groundedness: checkpoint.groundedness,
-      });
-      if (!checkpoint.completedAgents.includes('quality_evaluator')) {
-        checkpoint.completedAgents.push('quality_evaluator');
-      }
-
-      const decision = evaluateAdaptiveRetryDecision({
-        groundedness: checkpoint.groundedness,
-        quality: checkpoint.quality,
-        retryCount: checkpoint.retryCount,
-        maxRetries: checkpoint.maxRetries,
-        groundednessThreshold: settings.groundednessThreshold,
-      });
-
-      if (decision.shouldRetry) {
-        checkpoint.retryCount += 1;
-        extraQueries = checkpoint.quality.recommendedQueries.slice(0, 2);
-        saveCheckpoint({ sessionId, status: 'running', checkpoint });
-
-        appendExecutionEvent({
-          sessionId,
-          eventType: 'research_retry',
-          agentId: 'quality_evaluator',
-          message: decision.reason,
-          payload: {
-            retryCount: checkpoint.retryCount,
-            recommendedQueries: extraQueries,
-          },
-        });
-        continue;
-      }
-
-      const completedAt = new Date().toISOString();
-      saveCheckpoint({
-        sessionId,
-        status: decision.finalStatus,
-        checkpoint,
-        completedAt,
-      });
-
-      appendExecutionEvent({
-        sessionId,
-        eventType: 'execution_completed',
-        agentId: 'quality_evaluator',
-        message: decision.reason,
-        payload: {
-          status: decision.finalStatus,
-          groundednessPassed: checkpoint.groundedness.passed,
-          groundednessScore: checkpoint.groundedness.score,
-        },
-      });
-      break;
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unexpected workflow execution error.';
-    saveCheckpoint({
-      sessionId,
-      status: 'failed',
-      checkpoint,
-      completedAt: new Date().toISOString(),
-      errorMessage: message,
-    });
-    appendExecutionEvent({
-      sessionId,
-      eventType: 'execution_failed',
-      agentId: checkpoint.currentStep,
-      message,
-    });
-  }
 }
 
 export function approveResearchPlan(params: {
@@ -715,63 +424,70 @@ export function approveResearchPlan(params: {
     throw new Error(`Session cannot be approved from status "${session.status}".`);
   }
 
-  const checkpoint = session.checkpoint ?? createInitialCheckpoint(session.id, session.maxRetries);
-  if (params.updatedPlan) {
-    checkpoint.plan = params.updatedPlan;
+  const planToApprove = params.updatedPlan ?? session.plan;
+  if (!planToApprove || planToApprove.subtopics.length === 0) {
+    throw new Error('Approved research plan must include at least one subtopic.');
   }
-  if (!checkpoint.completedAgents.includes('human_approval')) {
-    checkpoint.completedAgents.push('human_approval');
-  }
-  checkpoint.currentStep = 'research_coordinator';
-  saveCheckpoint({ sessionId: session.id, status: 'running', checkpoint });
 
-  appendExecutionEvent({
+  const checkpoint = session.checkpoint ?? createInitialCheckpoint(session.id, session.maxRetries);
+  checkpoint.plan = planToApprove;
+  checkpoint.currentStep = 'research_coordinator';
+  saveSessionProjection({ sessionId: session.id, status: 'running', checkpoint });
+
+  const resumePayload: HumanApprovalResumePayload = {
+    action: 'approve',
+    updatedPlan: planToApprove,
+  };
+
+  dispatchLangGraphResumeAsync({
     sessionId: session.id,
-    eventType: 'agent_completed',
-    agentId: 'human_approval',
-    message: 'Research plan approved. Dispatching research agents.',
+    userId: params.userId,
+    input: new Command({ resume: resumePayload }),
   });
 
-  startWorkflowExecutionAsync({ sessionId: session.id, userId: params.userId });
   return getResearchSession(session.id, params.userId)!;
 }
 
-export function rejectResearchPlan(params: {
+/**
+ * Handles plan rejection at the LangGraph `human_approval` interrupt.
+ * - When `revise: true`, routes back to `planner` with user feedback and pauses again at `human_approval`.
+ * - Otherwise terminates the workflow cleanly in `'rejected'` status.
+ */
+export async function rejectResearchPlan(params: {
   sessionId: string;
   userId: string;
   reason?: string;
-}): ResearchSession {
+  revise?: boolean;
+}): Promise<ResearchSession> {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
   if (session.status !== 'awaiting_approval') {
-    throw new Error('Only plans awaiting approval can be rejected.');
+    throw new Error('Only plans awaiting approval can be rejected or revised.');
   }
 
-  const checkpoint = session.checkpoint ?? createInitialCheckpoint(session.id, session.maxRetries);
-  saveCheckpoint({
-    sessionId: session.id,
-    status: 'rejected',
-    checkpoint,
-    completedAt: new Date().toISOString(),
-    errorMessage: params.reason || 'Plan rejected by researcher.',
-  });
+  const resumePayload: HumanApprovalResumePayload = params.revise
+    ? {
+        action: 'revise',
+        feedback: params.reason?.trim() || 'Refine subtopics and broaden source coverage.',
+      }
+    : {
+        action: 'reject',
+        reason: params.reason?.trim() || 'Plan rejected by researcher.',
+      };
 
-  appendExecutionEvent({
+  await runGraphStreamAndSync({
     sessionId: session.id,
-    eventType: 'execution_paused',
-    agentId: 'human_approval',
-    message: params.reason
-      ? `Plan rejected: ${params.reason}`
-      : 'Plan rejected by researcher.',
+    userId: params.userId,
+    input: new Command({ resume: resumePayload }),
   });
 
   return getResearchSession(session.id, params.userId)!;
 }
 
-export function resumeResearchExecution(params: {
+export async function resumeResearchExecution(params: {
   sessionId: string;
   userId: string;
-}): ResearchSession {
+}): Promise<ResearchSession> {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
   if (session.status !== 'paused' && session.status !== 'failed') {
@@ -781,16 +497,92 @@ export function resumeResearchExecution(params: {
     throw new Error('No research plan checkpoint available to resume.');
   }
 
+  const graph = buildWorkflowGraph();
+  const config = makeThreadConfig(session.id, params.userId);
+  const savedState = await graph.getState(config);
+
   const checkpoint = session.checkpoint ?? createInitialCheckpoint(session.id, session.maxRetries);
-  saveCheckpoint({ sessionId: session.id, status: 'running', checkpoint, errorMessage: null });
+  saveSessionProjection({
+    sessionId: session.id,
+    status: 'running',
+    checkpoint,
+    errorMessage: null,
+  });
 
   appendExecutionEvent({
     sessionId: session.id,
     eventType: 'execution_started',
     agentId: checkpoint.currentStep,
-    message: 'Resuming execution from durable SQLite checkpoint.',
+    message: 'Resuming LangGraph execution from durable SQLite checkpoint.',
   });
 
-  startWorkflowExecutionAsync({ sessionId: session.id, userId: params.userId });
+  // If the thread is paused at the human_approval interrupt, resume with approve;
+  // otherwise pass `null` so LangGraph continues directly from the saved SQLite superstep.
+  if (Array.isArray(savedState.next) && savedState.next.includes('human_approval')) {
+    dispatchLangGraphResumeAsync({
+      sessionId: session.id,
+      userId: params.userId,
+      input: new Command({
+        resume: { action: 'approve', updatedPlan: session.plan } satisfies HumanApprovalResumePayload,
+      }),
+    });
+  } else if (Array.isArray(savedState.next) && savedState.next.length > 0) {
+    dispatchLangGraphResumeAsync({
+      sessionId: session.id,
+      userId: params.userId,
+      input: null,
+    });
+  } else {
+    // Recovery path for a failed/pre-migration session without pending LangGraph next nodes
+    const settings = getUserSettings(params.userId);
+    await graph.updateState(
+      config,
+      {
+        sessionId: session.id,
+        userId: params.userId,
+        question: session.question,
+        mode: session.mode,
+        includeWeb: session.includeWeb,
+        includeRag: session.includeRag,
+        collectionIds: session.collectionIds,
+        maxRetries: session.maxRetries,
+        groundednessThreshold: settings.groundednessThreshold,
+        reportTone: settings.reportTone,
+        citationStyle: settings.citationStyle,
+        plan: session.plan,
+        sources: checkpoint.sources,
+        claims: checkpoint.claims,
+        contradictions: checkpoint.contradictions,
+        topicSummaries: checkpoint.topicSummaries,
+        retryCount: checkpoint.retryCount,
+        status: 'running',
+        currentStep: 'research_coordinator',
+        completedAgents: checkpoint.completedAgents,
+      },
+      'human_approval'
+    );
+    dispatchLangGraphResumeAsync({
+      sessionId: session.id,
+      userId: params.userId,
+      input: null,
+    });
+  }
+
   return getResearchSession(session.id, params.userId)!;
+}
+
+/**
+ * Deletes both the research session row and its associated LangGraph SQLite thread checkpoints.
+ */
+export async function deleteResearchSessionAndThread(
+  sessionId: string,
+  userId: string
+): Promise<boolean> {
+  const db = getDb();
+  const info = db
+    .prepare(`DELETE FROM research_sessions WHERE id = ? AND user_id = ?`)
+    .run(sessionId, userId);
+  if (info.changes === 0) return false;
+  await getSqliteCheckpointer().deleteThread(sessionId);
+  return true;
 }

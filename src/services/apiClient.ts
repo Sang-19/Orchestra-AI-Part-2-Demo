@@ -288,10 +288,10 @@ export const apiClient = {
     });
   },
 
-  rejectPlan(id: string, reason?: string) {
+  rejectPlan(id: string, reason?: string, revise?: boolean) {
     return apiFetch<{ session: ResearchSession }>(`/research/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, revise: Boolean(revise) }),
     });
   },
 
