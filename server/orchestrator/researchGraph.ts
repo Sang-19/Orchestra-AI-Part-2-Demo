@@ -779,7 +779,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
   // 12. Groundedness Checker Node
   const groundednessCheckerNode = async (
     state: OrchestraGraphState
-  ): Promise<OrchestraGraphUpdate> => {
+  ) => {
     if (!state.report) {
       throw new Error('Groundedness Checker requires a generated report.');
     }
