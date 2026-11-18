@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
-import { createServer as createViteServer } from 'vite';
 import { closeDb, getDb } from './server/db/database';
 import { createApiRouter } from './server/routes/api';
 
@@ -64,14 +63,18 @@ async function startServer() {
   app.use('/api', createApiRouter());
   console.log('[OK] API routes registered. Health endpoint: /api/health');
 
-  if (!isProduction) {
-    console.log('[BOOT 4/5] Starting Vite development frontend middleware...');
+  const frontendMode = process.env.FRONTEND_MODE || 'embedded';
+  if (frontendMode === 'external') {
+    console.log('[BOOT 4/5] Frontend is running as a separate Vite service; backend API-only mode enabled.');
+  } else if (!isProduction) {
+    console.log('[BOOT 4/5] Starting embedded Vite development frontend middleware...');
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-    console.log('[OK] Vite frontend middleware ready.');
+    console.log('[OK] Embedded Vite frontend middleware ready.');
   } else {
     console.log('[BOOT 4/5] Checking and mounting production frontend build...');
     const distDir = path.resolve(process.cwd(), 'dist');
@@ -90,7 +93,7 @@ async function startServer() {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log('==================================================');
     console.log('[READY] Orchestra AI backend is listening.');
-    console.log(`[READY] Frontend: http://localhost:${PORT}`);
+    console.log(frontendMode === 'external' ? '[READY] Frontend: served separately on http://localhost:5173' : `[READY] Frontend: http://localhost:${PORT}`);
     console.log(`[READY] API health: http://localhost:${PORT}/api/health`);
     console.log('[READY] Request logs enabled (API + frontend).');
     console.log('==================================================');
