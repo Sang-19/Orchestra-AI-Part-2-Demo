@@ -4,7 +4,7 @@ import mammoth from 'mammoth';
 import { extractText } from 'unpdf';
 import { getDb } from '../db/database';
 import { embedTexts, hasGeminiKey } from '../ai/geminiClient';
-import { isOllamaProviderEnabled } from '../ai/ollamaClient';
+import { isOllamaEmbeddingEnabled } from '../ai/ollamaClient';
 import {
   chunkText,
   cleanDocumentText,
@@ -139,7 +139,7 @@ export async function ingestDocument(params: {
     let vectors: number[][] = [];
     let embeddingModel = 'deterministic-v1';
 
-    if (hasGeminiKey() || isOllamaProviderEnabled()) {
+    if (hasGeminiKey() || isOllamaEmbeddingEnabled()) {
       try {
         const batchSize = 20;
         for (let i = 0; i < chunks.length; i += batchSize) {
@@ -286,14 +286,17 @@ export async function semanticSearch(params: {
 
   if (rows.length === 0) return [];
 
-  let geminiQueryVec: number[] | null = null;
-  const hasGeminiChunks = rows.some((r) => r.embedding_model === 'gemini-embedding-2');
-  if (hasGeminiChunks && hasGeminiKey()) {
+  let queryVector: number[] | null = null;
+  let queryEmbeddingModel: string | null = null;
+  const hasRemoteEmbeddings = rows.some((r) => r.embedding_model !== 'deterministic-v1');
+  if (hasRemoteEmbeddings && (hasGeminiKey() || isOllamaEmbeddingEnabled())) {
     try {
-      const res = await embedTexts([queryText]);
-      geminiQueryVec = res.embeddings[0] ?? null;
+      const embedded = await embedTexts([queryText]);
+      queryVector = embedded.embeddings[0] ?? null;
+      queryEmbeddingModel = embedded.model;
     } catch {
-      geminiQueryVec = null;
+      queryVector = null;
+      queryEmbeddingModel = null;
     }
   }
   const fallbackQueryVec = computeDeterministicEmbedding(queryText);
@@ -305,10 +308,9 @@ export async function semanticSearch(params: {
 
   const scored: RetrievalMatch[] = rows.map((row) => {
     const chunkVec = JSON.parse(row.embedding_json) as number[];
-    const qVec =
-      row.embedding_model === 'gemini-embedding-2' && geminiQueryVec
-        ? geminiQueryVec
-        : fallbackQueryVec;
+    const qVec = queryVector && queryEmbeddingModel === row.embedding_model
+      ? queryVector
+      : fallbackQueryVec;
 
     let sim = 0;
     if (chunkVec.length === qVec.length) {
