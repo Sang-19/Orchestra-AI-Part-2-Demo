@@ -34,6 +34,7 @@ class SessionEventBus extends EventEmitter {
 
 export const sessionBus = new SessionEventBus();
 const activeRuns = new Set<string>();
+const pendingRunControls = new Map<string, 'pause' | 'stop'>();
 let customAgentOverrides: Partial<GraphAgentDependencies> | undefined;
 
 /**
@@ -262,11 +263,31 @@ async function runGraphStreamAndSync(params: { sessionId: string; userId: string
       for await (const snapshot of stream) {
         latestState = snapshot as unknown as OrchestraGraphState;
         if (latestState?.sessionId) saveSessionProjection({ sessionId: params.sessionId, status: latestState.status, checkpoint: projectGraphStateToCheckpoint(latestState), errorMessage: latestState.errorMessage });
+        if (pendingRunControls.has(params.sessionId)) break;
       }
       const finalSnapshot = await graph.getState(config);
       const finalValues = (finalSnapshot.values as OrchestraGraphState | undefined) ?? latestState;
       if (!finalValues) return;
       const projected = projectGraphStateToCheckpoint(finalValues);
+      const requestedControl = pendingRunControls.get(params.sessionId);
+      if (requestedControl) {
+        pendingRunControls.delete(params.sessionId);
+        const stopped = requestedControl === 'stop';
+        saveSessionProjection({
+          sessionId: params.sessionId,
+          status: stopped ? 'stopped' : 'paused',
+          checkpoint: projected,
+          completedAt: stopped ? new Date().toISOString() : null,
+          errorMessage: stopped ? 'Execution stopped by user.' : null,
+        });
+        appendExecutionEvent({
+          sessionId: params.sessionId,
+          eventType: stopped ? 'execution_stopped' : 'execution_paused',
+          agentId: projected.currentStep,
+          message: stopped ? 'Execution stopped by user at a durable checkpoint.' : 'Execution paused at a durable checkpoint.',
+        });
+        return;
+      }
       const pendingNodes = Array.isArray(finalSnapshot.next) ? finalSnapshot.next : [];
       if (pendingNodes.includes('human_approval')) {
         saveSessionProjection({ sessionId: params.sessionId, status: 'awaiting_approval', checkpoint: { ...projected, currentStep: 'human_approval' }, errorMessage: null });
@@ -366,6 +387,7 @@ function dispatchLangGraphResumeAsync(params: {
   input: Command | null;
 }): void {
   if (activeRuns.has(params.sessionId)) return;
+  pendingRunControls.delete(params.sessionId);
   activeRuns.add(params.sessionId);
 
   void runGraphStreamAndSync(params).finally(() => {
@@ -538,6 +560,7 @@ export async function deleteResearchSessionAndThread(
   sessionId: string,
   userId: string
 ): Promise<boolean> {
+  if (activeRuns.has(sessionId)) throw new Error('Pause or stop the active workflow before deleting it.');
   const db = getDb();
   const info = db
     .prepare(`DELETE FROM research_sessions WHERE id = ? AND user_id = ?`)
@@ -545,4 +568,32 @@ export async function deleteResearchSessionAndThread(
   if (info.changes === 0) return false;
   await getSqliteCheckpointer().deleteThread(sessionId);
   return true;
+}
+
+/** Request a cooperative pause. The stream exits after the current graph step is checkpointed. */
+export function pauseResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
+  const session = getResearchSession(params.sessionId, params.userId);
+  if (!session) throw new Error('Research session not found.');
+  if (session.status !== 'running' || !activeRuns.has(session.id)) {
+    throw new Error('Only an actively running workflow can be paused.');
+  }
+  pendingRunControls.set(session.id, 'pause');
+  return session;
+}
+
+/** Request a cooperative stop, or stop an already paused workflow immediately. */
+export function stopResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
+  const session = getResearchSession(params.sessionId, params.userId);
+  if (!session) throw new Error('Research session not found.');
+  if (session.status === 'running' && activeRuns.has(session.id)) {
+    pendingRunControls.set(session.id, 'stop');
+    return session;
+  }
+  if (session.status === 'paused') {
+    const checkpoint = session.checkpoint ?? createInitialCheckpoint(session.id, session.maxRetries);
+    saveSessionProjection({ sessionId: session.id, status: 'stopped', checkpoint, completedAt: new Date().toISOString(), errorMessage: 'Execution stopped by user.' });
+    appendExecutionEvent({ sessionId: session.id, eventType: 'execution_stopped', agentId: checkpoint.currentStep, message: 'Paused workflow stopped by user.' });
+    return getResearchSession(session.id, params.userId)!;
+  }
+  throw new Error('Only a running or paused workflow can be stopped.');
 }
