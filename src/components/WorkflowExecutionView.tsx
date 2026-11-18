@@ -297,6 +297,8 @@ export function WorkflowExecutionView({
             <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums">ID: {session.id.slice(0, 14)}</span>
             <span aria-hidden="true">·</span>
+            <span className="capitalize">{session.provider ?? 'gemini'}</span>
+            <span aria-hidden="true">·</span>
             <span className="tabular-nums">
               Adaptive retries: {session.retryCount}/{session.maxRetries} · Cycle {currentCycle?.cycleNumber ?? session.retryCount + 1}
             </span>
