@@ -267,12 +267,64 @@ export function WorkflowExecutionView({
 
   const currentCycle = session.executionCycle ?? session.checkpoint?.executionCycle;
   const cycleEvents = events.filter((evt) => !currentCycle?.cycleNumber || (evt.cycleNumber ?? 1) === currentCycle.cycleNumber);
-  const eventCompleted = cycleEvents.filter((evt) => evt.eventType === 'agent_completed' && evt.agentId).map((evt) => evt.agentId as AgentId);
-  const completedSet = new Set<AgentId>([...(currentCycle?.completedAgents ?? session.checkpoint?.completedAgents ?? []), ...eventCompleted]);
-  const failedSet = new Set(currentCycle?.failedAgents ?? []);
+  const eventCompleted = cycleEvents
+    .filter((evt) => evt.eventType === 'agent_completed' && evt.agentId)
+    .map((evt) => evt.agentId as AgentId);
+  const completedSet = new Set<AgentId>([
+    ...(currentCycle?.completedAgents ?? session.checkpoint?.completedAgents ?? []),
+    ...eventCompleted,
+  ]);
+  const failedSet = new Set<AgentId>(currentCycle?.failedAgents ?? []);
+
+  // Backward-compatible lifecycle mapping for sessions created before explicit completion
+  // events were added for the parallel researcher and groundedness checker stages.
+  const researcherCompletion = [...cycleEvents].reverse().find(
+    (evt) => evt.agentId === 'researcher' && evt.eventType === 'agent_completed'
+  );
+  const evidenceFanInStarted = cycleEvents.some(
+    (evt) => evt.agentId === 'evidence_extraction' && evt.eventType === 'agent_started'
+  );
+  if (researcherCompletion || evidenceFanInStarted) {
+    const partialFailure = Boolean(researcherCompletion?.payload?.partialFailure);
+    if (partialFailure) {
+      completedSet.delete('researcher');
+      failedSet.add('researcher');
+    } else {
+      completedSet.add('researcher');
+      failedSet.delete('researcher');
+    }
+  }
+
+  const groundednessResult = [...cycleEvents].reverse().find(
+    (evt) => evt.agentId === 'groundedness_checker' && evt.eventType === 'validation_result'
+  );
+  const groundednessIncomplete = groundednessResult?.payload?.validationStatus === 'incomplete';
+  if (groundednessResult) {
+    if (groundednessIncomplete) {
+      completedSet.delete('groundedness_checker');
+      failedSet.add('groundedness_checker');
+    } else {
+      completedSet.add('groundedness_checker');
+      failedSet.delete('groundedness_checker');
+    }
+  }
+  const isAgentFinished = (agentId: AgentId, laterEvents: ExecutionEvent[]) => {
+    if (laterEvents.some((evt) => evt.agentId === agentId && ['agent_completed', 'execution_failed'].includes(evt.eventType))) {
+      return true;
+    }
+    // Researcher fan-out is complete only after the fan-in node starts.
+    if (agentId === 'researcher') {
+      return laterEvents.some((evt) => evt.agentId === 'evidence_extraction' && evt.eventType === 'agent_started');
+    }
+    // A validation result (including an incomplete timeout result) ends the audit attempt.
+    if (agentId === 'groundedness_checker') {
+      return laterEvents.some((evt) => evt.agentId === 'groundedness_checker' && evt.eventType === 'validation_result');
+    }
+    return false;
+  };
   const latestAgentStart = [...cycleEvents].reverse().find((evt, index, reversed) =>
     evt.eventType === 'agent_started' && evt.agentId &&
-    !reversed.slice(0, index).some((later) => later.agentId === evt.agentId && ['agent_completed', 'execution_failed'].includes(later.eventType))
+    !isAgentFinished(evt.agentId, reversed.slice(0, index))
   );
   const latestApproval = [...cycleEvents].reverse().find((evt) => evt.eventType === 'approval_required');
   const activeAgentFromEvents = latestApproval && (!latestAgentStart || latestApproval.seq > latestAgentStart.seq)
