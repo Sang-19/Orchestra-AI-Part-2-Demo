@@ -38,7 +38,7 @@ export function SettingsView({
         planner: 'gemini-4-hydrogen', researcher: 'gemini-3.8-flash', evidenceExtractor: 'gemini-3.6-flash',
         factChecker: 'gemini-4-hydrogen', sourceCredibility: 'gemini-3.5-flash-lite', contradictionChecker: 'gemini-4-hydrogen',
         summarizer: 'gemini-3.1-flash-lite', writer: 'gemini-3.8-flash', groundednessChecker: 'gemini-4-hydrogen',
-        qualityEvaluator: 'gemini-3.6-flash', searchGrounding: 'gemini-3.6-flash',
+        qualityEvaluator: 'gemini-3.6-flash',
       },
       updatedAt: new Date().toISOString(),
     }
@@ -327,7 +327,6 @@ export function SettingsView({
               ['sourceCredibility', 'Source Credibility'], ['contradictionChecker', 'Contradiction Checker'],
               ['summarizer', 'Summarizer'], ['writer', 'Writer Agent'],
               ['groundednessChecker', 'Groundedness Checker'], ['qualityEvaluator', 'Quality Evaluator'],
-              ['searchGrounding', 'Google Search Grounding'],
             ] as Array<[keyof AgentModelRouting, string]>).map(([role, label]) => (
               <div key={role}>
                 <label htmlFor={`model-${role}`} className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
