@@ -815,8 +815,14 @@ export function createApiRouter(): express.Router {
           res.status(400).json({ error: 'Ollama is reachable, but no local models are installed. Run `ollama pull ' + getOllamaConfig().model + '` and try again.' });
           return;
         }
-        if (!ollama.models.includes(getOllamaConfig().model)) {
+        const hasConfiguredModel = (name: string) => ollama.models.some((installed) => installed === name || installed.startsWith(name + ':'));
+        if (!hasConfiguredModel(getOllamaConfig().model)) {
           res.status(400).json({ error: `Ollama is connected, but model "${getOllamaConfig().model}" is not installed. Available models: ${ollama.models.join(', ')}.` });
+          return;
+        }
+        const needsRag = includeRag ?? getUserSettings(req.user!.id).includeRagDefault;
+        if (needsRag && !hasConfiguredModel(getOllamaConfig().embedModel)) {
+          res.status(400).json({ error: `Ollama embedding model "${getOllamaConfig().embedModel}" is not installed. Run ollama pull ${getOllamaConfig().embedModel} or disable the Knowledge Base option.` });
           return;
         }
       }
