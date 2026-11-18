@@ -552,10 +552,32 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     });
   };
 
-  // 6. Evidence Extraction Node (fan-in after all parallel researcher_worker tasks)
+  // 6. Evidence Extraction Node runs only after every parallel researcher_worker branch
+  // has joined. Emit an explicit researcher completion event here (not per worker), so
+  // the UI cannot mark the parent stage complete while sibling branches are still running.
   const evidenceExtractionNode = async (
     state: OrchestraGraphState
   ): Promise<OrchestraGraphUpdate> => {
+    const failedResearchBranches = state.researchGaps.filter((gap) =>
+      /^Subtopic ".+" failed:/.test(gap)
+    );
+    const plannedSubtopics = deduplicateSubtopics(state.plan?.subtopics ?? []);
+
+    emit({
+      sessionId: state.sessionId,
+      eventType: 'agent_completed',
+      agentId: 'researcher',
+      message: failedResearchBranches.length > 0
+        ? `Research fan-out finished with ${failedResearchBranches.length} failed subtopic branch(es); ${state.sources.length} sources were collected.`
+        : `All ${plannedSubtopics.length} parallel research branches completed; ${state.sources.length} sources were collected.`,
+      payload: {
+        subtopicCount: plannedSubtopics.length,
+        sourceCount: state.sources.length,
+        failedBranches: failedResearchBranches.length,
+        partialFailure: failedResearchBranches.length > 0,
+      },
+    });
+
     emit({
       sessionId: state.sessionId,
       eventType: 'agent_started',
@@ -585,7 +607,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     return {
       claims,
       currentStep: 'fact_checker',
-      completedAgents: ['evidence_extraction'],
+      completedAgents: ['researcher', 'evidence_extraction'],
     };
   };
 
@@ -838,6 +860,13 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     if (groundedness.validationStatus === 'incomplete') {
       emit({
         sessionId: state.sessionId,
+        eventType: 'agent_progress',
+        agentId: 'groundedness_checker',
+        message: 'Groundedness audit did not finish; manual review is required.',
+        payload: { failed: true, validationStatus: 'incomplete' },
+      });
+      emit({
+        sessionId: state.sessionId,
         eventType: 'execution_completed',
         agentId: 'groundedness_checker',
         message: 'Research report saved with warnings because the AI groundedness audit timed out. Manual review is required.',
@@ -850,10 +879,24 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
           groundedness,
           status: 'completed_with_warnings',
           currentStep: 'groundedness_checker',
-          completedAgents: ['groundedness_checker'],
+          // The audit timed out, so this stage must not be recorded as completed.
         },
       });
     }
+
+    emit({
+      sessionId: state.sessionId,
+      eventType: 'agent_completed',
+      agentId: 'groundedness_checker',
+      message: groundedness.passed
+        ? 'Groundedness audit completed successfully.'
+        : 'Groundedness audit completed with validation findings.',
+      payload: {
+        passed: groundedness.passed,
+        score: groundedness.score,
+        validationStatus: 'complete',
+      },
+    });
 
     return {
       report: updatedReport,
