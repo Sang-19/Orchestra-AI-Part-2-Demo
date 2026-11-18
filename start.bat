@@ -48,17 +48,18 @@ if errorlevel 1 (
         exit /b 1
     )
 
-    echo [INFO] Waiting for Docker Engine...
+    echo [INFO] Waiting for Docker Engine (up to 90 seconds)...
     set "DOCKER_READY="
     for /L %%I in (1,1,45) do (
-        docker info >nul 2>&1
-        if not errorlevel 1 (
-            set "DOCKER_READY=1"
-            goto :docker_ready
+        if not defined DOCKER_READY (
+            docker info >nul 2>&1
+            if not errorlevel 1 (
+                set "DOCKER_READY=1"
+            ) else (
+                timeout /t 2 /nobreak >nul
+            )
         )
-        timeout /t 2 /nobreak >nul
     )
-    :docker_ready
     if not defined DOCKER_READY (
         echo [ERROR] Docker Engine did not become ready within 90 seconds.
         echo Open Docker Desktop, resolve any startup issue, and retry.
@@ -81,17 +82,18 @@ if errorlevel 1 (
 )
 
 echo.
-echo [INFO] Waiting for the application health endpoint...
+echo [INFO] Waiting for the application health endpoint (up to 120 seconds)...
 set "APP_READY="
 for /L %%I in (1,1,60) do (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:3000/api/health' -TimeoutSec 3; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-        set "APP_READY=1"
-        goto :app_ready
+    if not defined APP_READY (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:3000/api/health' -TimeoutSec 3; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+        if not errorlevel 1 (
+            set "APP_READY=1"
+        ) else (
+            timeout /t 2 /nobreak >nul
+        )
     )
-    timeout /t 2 /nobreak >nul
 )
-:app_ready
 
 if not defined APP_READY (
     echo [WARNING] The container started, but the health endpoint did not respond.
