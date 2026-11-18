@@ -108,7 +108,19 @@ if not defined APP_READY (
 echo [PASS] Backend API responds and database query succeeded.
 
 echo.
-echo [8/8] Opening application and live backend logs...
+echo [8/9] Checking frontend page response...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:3000/' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+    echo [FAIL] Frontend page did not return HTTP 200.
+    echo [INFO] Backend is healthy, but check the frontend build and container logs.
+    docker compose logs --tail=80
+    pause
+    exit /b 1
+)
+echo [PASS] Frontend page returned HTTP 200.
+
+echo.
+echo [9/9] Opening application and live backend logs...
 echo [PASS] Frontend is being served by the backend at http://localhost:3000
 start "" "http://localhost:3000"
 start "Orchestra AI - Live Logs" cmd /k "cd /d ""%~dp0"" && docker compose logs --follow --no-color"
