@@ -1,7 +1,6 @@
 import { GoogleGenAI, ThinkingLevel, type Schema } from '@google/genai';
 import { getActiveLLMProvider, getModelCandidates, isModelFallbackWorthy, isRetryableServerError, type ModelRole } from './modelRouter';
 import {
-  isOllamaProviderEnabled,
   ollamaEmbedTexts,
   ollamaGenerateStructuredJson,
   isOllamaEmbeddingEnabled,
@@ -90,7 +89,7 @@ export async function generateStructuredJson<T>(params: {
   modelRole: ModelRole;
 }): Promise<T> {
   const request = async (): Promise<T> => {
-  if (getActiveLLMProvider() === 'ollama' || isOllamaProviderEnabled()) {
+  if (getActiveLLMProvider() === 'ollama') {
     return withExponentialBackoff(() =>
       ollamaGenerateStructuredJson<T>({
         systemInstruction: params.systemInstruction,
