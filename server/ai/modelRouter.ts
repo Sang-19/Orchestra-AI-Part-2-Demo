@@ -14,7 +14,6 @@ export const DEFAULT_AGENT_MODEL_ROUTING: AgentModelRouting = {
   writer: 'gemini-3.8-flash',
   groundednessChecker: 'gemini-4-hydrogen',
   qualityEvaluator: 'gemini-3.6-flash',
-  searchGrounding: 'gemini-3.6-flash',
 };
 
 const FALLBACK_MODELS: Record<ModelRole, GeminiModelId[]> = {
@@ -28,7 +27,6 @@ const FALLBACK_MODELS: Record<ModelRole, GeminiModelId[]> = {
   writer: ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'],
   groundednessChecker: ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'],
   qualityEvaluator: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
-  searchGrounding: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'],
 };
 
 const routingContext = new AsyncLocalStorage<Partial<AgentModelRouting>>();
