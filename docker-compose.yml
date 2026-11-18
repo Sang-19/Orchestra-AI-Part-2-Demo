@@ -23,6 +23,9 @@ services:
       AGENT_REQUEST_TIMEOUT_MS: ${AGENT_REQUEST_TIMEOUT_MS:-90000}
     volumes:
       - orchestra_data:/app/data
+      - ./server:/app/server
+      - ./server.ts:/app/server.ts:ro
+      - ./src/types:/app/src/types:ro
     init: true
     restart: unless-stopped
     healthcheck:
@@ -45,6 +48,10 @@ services:
     environment:
       NODE_ENV: development
       VITE_API_PROXY_TARGET: http://backend:3000
+    volumes:
+      - ./src:/app/src
+      - ./index.html:/app/index.html:ro
+      - ./vite.config.ts:/app/vite.config.ts:ro
     depends_on:
       backend:
         condition: service_healthy
