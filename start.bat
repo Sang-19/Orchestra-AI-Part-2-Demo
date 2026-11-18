@@ -104,15 +104,21 @@ if not defined BACKEND_READY (
 echo [PASS] Backend API and SQLite are healthy.
 
 echo.
-echo [7/7] Checking frontend and opening separate log windows...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:5173/' -TimeoutSec 10; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-if errorlevel 1 (
+echo [7/7] Waiting for frontend Vite server (up to 120 seconds)...
+set "FRONTEND_READY="
+for /L %%I in (1,1,60) do (
+    if not defined FRONTEND_READY (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:5173/' -TimeoutSec 3; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+        if not errorlevel 1 (set "FRONTEND_READY=1") else (timeout /t 2 /nobreak >nul)
+    )
+)
+if not defined FRONTEND_READY (
     echo [FAIL] Frontend did not return HTTP 200.
     docker compose logs --tail=80 frontend
     pause
     exit /b 1
 )
-echo [PASS] Frontend is responding.
+echo [PASS] Frontend Vite server is responding.
 
 echo [INFO] Opening Backend CMD and Frontend CMD windows...
 start "Orchestra AI - BACKEND" cmd /k "cd /d ""%~dp0"" && title Orchestra AI - BACKEND && echo ==== BACKEND API + LANGGRAPH LOGS ==== && docker compose logs --follow --no-color backend"
