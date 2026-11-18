@@ -486,7 +486,41 @@ export async function resumeResearchExecution(params: {
     throw new Error(`Cannot resume session in status "${session.status}".`);
   }
   if (!session.plan) {
-    throw new Error('No research plan checkpoint available to resume.');
+    // A Planner failure has no plan checkpoint to resume. Clear only the LangGraph
+    // thread state and restart this same session from input validation.
+    await getSqliteCheckpointer().deleteThread(session.id);
+    const settings = getUserSettings(params.userId);
+    const checkpoint = createInitialCheckpoint(session.id, session.maxRetries);
+    saveSessionProjection({
+      sessionId: session.id,
+      status: 'planning',
+      checkpoint,
+      errorMessage: null,
+    });
+    appendExecutionEvent({
+      sessionId: session.id,
+      eventType: 'execution_started',
+      agentId: 'input_validation',
+      message: 'Retrying Planner from the beginning with the selected AI provider.',
+    });
+    dispatchLangGraphResumeAsync({
+      sessionId: session.id,
+      userId: params.userId,
+      input: {
+        sessionId: session.id,
+        userId: params.userId,
+        question: session.question,
+        mode: session.mode,
+        includeWeb: session.includeWeb,
+        includeRag: session.includeRag,
+        collectionIds: session.collectionIds,
+        maxRetries: session.maxRetries,
+        groundednessThreshold: settings.groundednessThreshold,
+        reportTone: settings.reportTone,
+        citationStyle: settings.citationStyle,
+      },
+    });
+    return getResearchSession(session.id, params.userId)!;
   }
 
   const graph = buildWorkflowGraph();
