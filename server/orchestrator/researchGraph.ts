@@ -779,7 +779,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
   // 12. Groundedness Checker Node
   const groundednessCheckerNode = async (
     state: OrchestraGraphState
-  ): Promise<OrchestraGraphUpdate> => {
+  ) => {
     if (!state.report) {
       throw new Error('Groundedness Checker requires a generated report.');
     }
@@ -791,17 +791,14 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       message: 'Auditing report statements and citations against verified claims.',
     });
 
-    const groundedness = await withNodeRetry(
-      () =>
-        agents.groundednessChecker({
-          report: state.report!,
-          claims: state.claims,
-          sources: state.sources,
-          threshold: state.groundednessThreshold,
-        }),
-      maxNodeAttempts,
-      nodeRetryDelayMs
-    );
+    // The agent applies one shared wall-clock budget across its complete model-fallback chain.
+    // Do not wrap it in the generic node retry: repeating a timed-out audit multiplies latency.
+    const groundedness = await agents.groundednessChecker({
+      report: state.report!,
+      claims: state.claims,
+      sources: state.sources,
+      threshold: state.groundednessThreshold,
+    });
 
     const updatedReport = {
       ...state.report,
@@ -821,8 +818,29 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       payload: {
         passed: groundedness.passed,
         score: groundedness.score,
+        validationStatus: groundedness.validationStatus ?? 'complete',
       },
     });
+
+    if (groundedness.validationStatus === 'incomplete') {
+      emit({
+        sessionId: state.sessionId,
+        eventType: 'execution_completed',
+        agentId: 'groundedness_checker',
+        message: 'Research report saved with warnings because the AI groundedness audit timed out. Manual review is required.',
+        payload: { status: 'completed_with_warnings', groundednessPassed: false, validationStatus: 'incomplete' },
+      });
+      return new Command({
+        goto: END,
+        update: {
+          report: updatedReport,
+          groundedness,
+          status: 'completed_with_warnings',
+          currentStep: 'groundedness_checker',
+          completedAgents: ['groundedness_checker'],
+        },
+      });
+    }
 
     return {
       report: updatedReport,
@@ -981,7 +999,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     .addNode('contradiction_checker', contradictionCheckerNode)
     .addNode('summarizer', summarizerNode)
     .addNode('writer', writerNode)
-    .addNode('groundedness_checker', groundednessCheckerNode)
+    .addNode('groundedness_checker', groundednessCheckerNode, { ends: [END] })
     .addNode('quality_evaluator', qualityEvaluatorNode, {
       ends: ['research_coordinator', 'contradiction_checker', 'writer', END],
     })

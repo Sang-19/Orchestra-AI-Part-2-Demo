@@ -136,6 +136,8 @@ export interface ContradictionRecord {
 }
 
 export interface GroundednessResult {
+  /** AI audit completion state; absent means the legacy complete result shape. */
+  validationStatus?: 'complete' | 'incomplete';
   passed: boolean;
   score: number;
   totalStatementsChecked: number;
