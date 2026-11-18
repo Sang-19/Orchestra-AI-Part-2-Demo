@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_AGENT_MODEL_ROUTING,
   getModelCandidates,
+  getActiveLLMProvider,
   isModelFallbackWorthy,
   normalizeModelRouting,
   runWithModelRouting,
@@ -22,6 +23,12 @@ test('agent overrides are scoped to the active workflow context', () => {
   assert.equal(candidates[0], 'gemini-2.5-flash');
   assert.ok(candidates.includes('gemini-3.6-flash'));
   assert.equal(getModelCandidates('writer')[0], DEFAULT_AGENT_MODEL_ROUTING.writer);
+});
+
+test('AI provider selection is scoped to the active workflow context', () => {
+  assert.equal(runWithModelRouting({}, () => getActiveLLMProvider(), 'ollama'), 'ollama');
+  assert.equal(runWithModelRouting({}, () => getActiveLLMProvider(), 'gemini'), 'gemini');
+  assert.equal(getActiveLLMProvider(), (process.env.LLM_PROVIDER || '').trim().toLowerCase() === 'ollama' ? 'ollama' : 'gemini');
 });
 
 test('model routing ignores unsupported model IDs and preserves safe defaults', () => {

@@ -60,8 +60,14 @@ export function WorkflowExecutionView({
   const [showRejectBox, setShowRejectBox] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [clockNow, setClockNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const loadSession = async (id: string) => {
     setLoading(true);
@@ -260,8 +266,21 @@ export function WorkflowExecutionView({
   }
 
   const currentCycle = session.executionCycle ?? session.checkpoint?.executionCycle;
-  const completedSet = new Set(currentCycle?.completedAgents ?? session.checkpoint?.completedAgents ?? []);
+  const cycleEvents = events.filter((evt) => !currentCycle?.cycleNumber || (evt.cycleNumber ?? 1) === currentCycle.cycleNumber);
+  const eventCompleted = cycleEvents.filter((evt) => evt.eventType === 'agent_completed' && evt.agentId).map((evt) => evt.agentId as AgentId);
+  const completedSet = new Set<AgentId>([...(currentCycle?.completedAgents ?? session.checkpoint?.completedAgents ?? []), ...eventCompleted]);
   const failedSet = new Set(currentCycle?.failedAgents ?? []);
+  const latestAgentStart = [...cycleEvents].reverse().find((evt, index, reversed) =>
+    evt.eventType === 'agent_started' && evt.agentId &&
+    !reversed.slice(0, index).some((later) => later.agentId === evt.agentId && ['agent_completed', 'execution_failed'].includes(later.eventType))
+  );
+  const latestApproval = [...cycleEvents].reverse().find((evt) => evt.eventType === 'approval_required');
+  const activeAgentFromEvents = latestApproval && (!latestAgentStart || latestApproval.seq > latestAgentStart.seq)
+    ? 'human_approval' as AgentId
+    : latestAgentStart?.agentId ?? null;
+  const agentElapsedSeconds = latestAgentStart ? Math.max(0, Math.floor((clockNow - new Date(latestAgentStart.createdAt).getTime()) / 1000)) : 0;
+  const requestTimeoutMs = Number(latestAgentStart?.payload?.timeoutMs) || 90_000;
+  const agentTimedOut = Boolean(latestAgentStart && agentElapsedSeconds * 1000 >= requestTimeoutMs && ['planning', 'running'].includes(session.status));
   const sources = session.checkpoint?.sources ?? [];
   const claims = session.checkpoint?.claims ?? [];
   const canViewReport =
@@ -278,11 +297,19 @@ export function WorkflowExecutionView({
             <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums">ID: {session.id.slice(0, 14)}</span>
             <span aria-hidden="true">·</span>
+            <span className="capitalize">{session.provider ?? 'gemini'}</span>
+            <span aria-hidden="true">·</span>
             <span className="tabular-nums">
               Adaptive retries: {session.retryCount}/{session.maxRetries} · Cycle {currentCycle?.cycleNumber ?? session.retryCount + 1}
             </span>
           </div>
           <h1 className="mt-1.5 text-xl font-semibold text-slate-900">{session.question}</h1>
+          {latestAgentStart && ['planning', 'running'].includes(session.status) && (
+            <div className={`mt-3 flex flex-wrap items-center gap-2 text-xs ${agentTimedOut ? 'text-red-700' : 'text-slate-600'}`} role="status" aria-live="polite">
+              <span className={`inline-block h-2 w-2 rounded-full ${agentTimedOut ? 'bg-red-600' : 'bg-blue-600 animate-pulse'}`} />
+              <span>{latestAgentStart.agentId?.replace(/_/g, ' ')} {agentTimedOut ? 'has exceeded the 90-second request budget; waiting for the backend timeout and retry handler.' : 'is executing'} · {Math.floor(agentElapsedSeconds / 60)}m {agentElapsedSeconds % 60}s elapsed</span>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
@@ -301,7 +328,7 @@ export function WorkflowExecutionView({
             </select>
           )}
 
-          {session.status === 'running' && (
+          {['running', 'planning'].includes(session.status) && (
             <>
               <button type="button" onClick={handlePause} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
                 <Pause className="w-3.5 h-3.5" /> Pause
@@ -490,7 +517,7 @@ export function WorkflowExecutionView({
               const isDone = completedSet.has(stage.id);
               const isFailed = failedSet.has(stage.id);
               const isCurrent =
-                session.currentAgent === stage.id &&
+                (activeAgentFromEvents === stage.id || (!activeAgentFromEvents && session.currentAgent === stage.id)) &&
                 (session.status === 'running' ||
                   session.status === 'planning' ||
                   session.status === 'awaiting_approval');

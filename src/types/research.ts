@@ -14,6 +14,7 @@ export type AgentId =
   | 'quality_evaluator';
 
 export type ResearchMode = 'standard' | 'deep' | 'document_focused';
+export type AIProvider = 'gemini' | 'ollama';
 
 export type ResearchStatus =
   | 'planning'
@@ -214,6 +215,7 @@ export interface ResearchSession {
   userId: string;
   question: string;
   mode: ResearchMode;
+  provider?: AIProvider;
   status: ResearchStatus;
   includeWeb: boolean;
   includeRag: boolean;

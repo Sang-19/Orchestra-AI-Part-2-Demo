@@ -17,6 +17,7 @@ import { getSqliteCheckpointer } from './sqliteCheckpointer';
 import { runWithModelRouting, DEFAULT_AGENT_MODEL_ROUTING, normalizeModelRouting } from '../ai/modelRouter';
 import type {
   AgentId,
+  AIProvider,
   ExecutionEvent,
   ResearchMode,
   ResearchPlan,
@@ -220,6 +221,7 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
     userId: String(row.user_id),
     question: String(row.question),
     mode: row.mode as ResearchMode,
+    provider: (row.provider as AIProvider | undefined) ?? 'gemini',
     status: row.status as ResearchStatus,
     includeWeb: Boolean(row.include_web),
     includeRag: Boolean(row.include_rag),
@@ -253,11 +255,12 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
  * Streams a LangGraph invocation or resumption while projecting each state transition
  * into `research_sessions` for real-time API & frontend visibility.
  */
-async function runGraphStreamAndSync(params: { sessionId: string; userId: string; input: Record<string, unknown> | Command | null }): Promise<void> {
+async function runGraphStreamAndSync(params: { sessionId: string; userId: string; input: Record<string, unknown> | Command | null; provider?: AIProvider }): Promise<void> {
   const graph = buildWorkflowGraph();
   const config = makeThreadConfig(params.sessionId, params.userId);
   let latestState: OrchestraGraphState | null = null;
   try {
+    const selectedProvider = params.provider ?? getResearchSession(params.sessionId, params.userId)?.provider ?? 'gemini';
     await runWithModelRouting(getUserSettings(params.userId).modelRouting, async () => {
       const stream = await graph.stream(params.input as never, { ...config, streamMode: 'values' });
       for await (const snapshot of stream) {
@@ -299,7 +302,7 @@ async function runGraphStreamAndSync(params: { sessionId: string; userId: string
         return;
       }
       saveSessionProjection({ sessionId: params.sessionId, status: finalValues.status, checkpoint: projected, completedAt: new Date().toISOString(), errorMessage: finalValues.errorMessage });
-    });
+    }, selectedProvider);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected LangGraph execution error.';
     const current = getResearchSession(params.sessionId, params.userId);
@@ -317,6 +320,7 @@ export async function createAndPlanResearch(params: {
   includeRag?: boolean;
   collectionIds?: string[];
   maxRetries?: number;
+  provider?: AIProvider;
 }): Promise<ResearchSession> {
   const validation = validateResearchInput(params.question);
   if (!validation.valid) {
@@ -329,6 +333,7 @@ export async function createAndPlanResearch(params: {
   const includeWeb = params.includeWeb ?? settings.includeWebDefault;
   const includeRag = params.includeRag ?? settings.includeRagDefault;
   const collectionIds = params.collectionIds ?? [];
+  const provider: AIProvider = params.provider === 'ollama' ? 'ollama' : 'gemini';
 
   if (!includeWeb && !includeRag) {
     throw new Error('Select at least one knowledge source (Web Search or Knowledge Base).');
@@ -341,14 +346,15 @@ export async function createAndPlanResearch(params: {
 
   db.prepare(`
     INSERT INTO research_sessions (
-      id, user_id, question, mode, status, include_web, include_rag, collection_ids_json,
+      id, user_id, question, mode, provider, status, include_web, include_rag, collection_ids_json,
       max_retries, retry_count, current_agent, checkpoint_json, started_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'planning', ?, ?, ?, ?, 0, 'input_validation', ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'planning', ?, ?, ?, ?, 0, 'input_validation', ?, ?, ?, ?)
   `).run(
     sessionId,
     params.userId,
     params.question.trim(),
     mode,
+    provider,
     includeWeb ? 1 : 0,
     includeRag ? 1 : 0,
     JSON.stringify(collectionIds),
@@ -359,10 +365,12 @@ export async function createAndPlanResearch(params: {
     now
   );
 
-  // Execute LangGraph from START until it pauses at the `human_approval` interrupt()
-  await runGraphStreamAndSync({
+  // Start the graph in the background so the UI can subscribe to live events immediately.
+  activeRuns.add(sessionId);
+  void runGraphStreamAndSync({
     sessionId,
     userId: params.userId,
+    provider,
     input: {
       sessionId,
       userId: params.userId,
@@ -376,6 +384,8 @@ export async function createAndPlanResearch(params: {
       reportTone: settings.reportTone,
       citationStyle: settings.citationStyle,
     },
+  }).finally(() => {
+    activeRuns.delete(sessionId);
   });
 
   return getResearchSession(sessionId, params.userId)!;
@@ -476,7 +486,41 @@ export async function resumeResearchExecution(params: {
     throw new Error(`Cannot resume session in status "${session.status}".`);
   }
   if (!session.plan) {
-    throw new Error('No research plan checkpoint available to resume.');
+    // A Planner failure has no plan checkpoint to resume. Clear only the LangGraph
+    // thread state and restart this same session from input validation.
+    await getSqliteCheckpointer().deleteThread(session.id);
+    const settings = getUserSettings(params.userId);
+    const checkpoint = createInitialCheckpoint(session.id, session.maxRetries);
+    saveSessionProjection({
+      sessionId: session.id,
+      status: 'planning',
+      checkpoint,
+      errorMessage: null,
+    });
+    appendExecutionEvent({
+      sessionId: session.id,
+      eventType: 'execution_started',
+      agentId: 'input_validation',
+      message: 'Retrying Planner from the beginning with the selected AI provider.',
+    });
+    dispatchLangGraphResumeAsync({
+      sessionId: session.id,
+      userId: params.userId,
+      input: {
+        sessionId: session.id,
+        userId: params.userId,
+        question: session.question,
+        mode: session.mode,
+        includeWeb: session.includeWeb,
+        includeRag: session.includeRag,
+        collectionIds: session.collectionIds,
+        maxRetries: session.maxRetries,
+        groundednessThreshold: settings.groundednessThreshold,
+        reportTone: settings.reportTone,
+        citationStyle: settings.citationStyle,
+      },
+    });
+    return getResearchSession(session.id, params.userId)!;
   }
 
   const graph = buildWorkflowGraph();
@@ -574,8 +618,8 @@ export async function deleteResearchSessionAndThread(
 export function pauseResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
-  if (session.status !== 'running' || !activeRuns.has(session.id)) {
-    throw new Error('Only an actively running workflow can be paused.');
+  if (!['running', 'planning'].includes(session.status) || !activeRuns.has(session.id)) {
+    throw new Error('Only an actively executing workflow can be paused.');
   }
   pendingRunControls.set(session.id, 'pause');
   return session;
@@ -585,7 +629,7 @@ export function pauseResearchExecution(params: { sessionId: string; userId: stri
 export function stopResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
-  if (session.status === 'running' && activeRuns.has(session.id)) {
+  if (['running', 'planning'].includes(session.status) && activeRuns.has(session.id)) {
     pendingRunControls.set(session.id, 'stop');
     return session;
   }

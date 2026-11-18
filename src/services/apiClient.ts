@@ -1,5 +1,6 @@
 import { SseStreamParser } from '../utils/sseParser';
 import type {
+  AIProvider,
   CollectionRecord,
   CustomToolRecord,
   CustomToolType,
@@ -262,6 +263,7 @@ export const apiClient = {
     includeRag: boolean;
     collectionIds: string[];
     maxRetries: number;
+    provider?: AIProvider;
   }) {
     return apiFetch<{ session: ResearchSession }>('/research', {
       method: 'POST',

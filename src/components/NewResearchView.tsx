@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Play, Globe, Database, SlidersHorizontal } from 'lucide-react';
+import { Play, Globe, Database, SlidersHorizontal, Sparkles, Cpu } from 'lucide-react';
 import { apiClient } from '../services/apiClient';
 import type {
+  AIProvider,
   CollectionRecord,
   ResearchMode,
   ResearchSession,
@@ -26,6 +27,7 @@ export function NewResearchView({
   onCreatedSession,
 }: NewResearchViewProps) {
   const [question, setQuestion] = useState('');
+  const [provider, setProvider] = useState<AIProvider>('gemini');
   const [mode, setMode] = useState<ResearchMode>(settings?.defaultMode ?? 'standard');
   const [includeWeb, setIncludeWeb] = useState<boolean>(settings?.includeWebDefault ?? true);
   const [includeRag, setIncludeRag] = useState<boolean>(settings?.includeRagDefault ?? true);
@@ -61,6 +63,7 @@ export function NewResearchView({
         includeRag,
         collectionIds: selectedCollections,
         maxRetries,
+        provider,
       });
       onCreatedSession(res.session);
     } catch (err) {
@@ -119,6 +122,22 @@ export function NewResearchView({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* AI Provider */}
+        <div className="pt-4 border-t border-slate-100">
+          <div className="text-sm font-medium text-slate-800 mb-3">Choose AI Provider</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button type="button" onClick={() => setProvider('gemini')} aria-pressed={provider === 'gemini'} className={`p-4 rounded-lg border text-left transition-colors ${provider === 'gemini' ? 'border-blue-700 bg-blue-50/50 ring-1 ring-blue-700' : 'border-slate-200 hover:border-slate-300'}`}>
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Sparkles className="w-4 h-4 text-blue-700" /> Google Gemini</div>
+              <p className="mt-1 text-xs text-slate-500">Cloud-hosted AI using your configured Gemini API key.</p>
+            </button>
+            <button type="button" onClick={() => setProvider('ollama')} aria-pressed={provider === 'ollama'} className={`p-4 rounded-lg border text-left transition-colors ${provider === 'ollama' ? 'border-emerald-700 bg-emerald-50/50 ring-1 ring-emerald-700' : 'border-slate-200 hover:border-slate-300'}`}>
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Cpu className="w-4 h-4 text-emerald-700" /> Ollama (Local)</div>
+              <p className="mt-1 text-xs text-slate-500">Run agent reasoning locally. Live web discovery still requires Tavily when Ollama is selected.</p>
+            </button>
+          </div>
+          {provider === 'ollama' && <p className="mt-2 text-xs text-amber-700">Make sure Ollama is running and OLLAMA_BASE_URL / OLLAMA_MODEL are configured on the Orchestra server.</p>}
         </div>
 
         {/* Research Mode */}
@@ -273,7 +292,7 @@ export function NewResearchView({
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white text-sm font-medium transition-colors whitespace-nowrap"
           >
             <Play className="w-4 h-4" />
-            <span>{submitting ? 'Generating Research Plan...' : 'Generate Research Plan'}</span>
+            <span>{submitting ? 'Starting Research...' : 'Generate Research Plan'}</span>
           </button>
         </div>
       </form>

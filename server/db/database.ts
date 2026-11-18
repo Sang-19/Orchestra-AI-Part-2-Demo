@@ -225,6 +225,12 @@ function initializeSchema(db: Database.Database): void {
       ON langgraph_checkpoint_writes(thread_id, checkpoint_ns, checkpoint_id);
   `);
 
+  // Additive migration for per-session AI provider selection.
+  const sessionColumns = db.pragma('table_info(research_sessions)') as Array<{ name: string }>;
+  if (!sessionColumns.some((column) => column.name === 'provider')) {
+    db.exec("ALTER TABLE research_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'gemini'");
+  }
+
   // Additive migration for existing SQLite workspaces created before model routing.
   const settingsColumns = db.pragma('table_info(user_settings)') as Array<{ name: string }>;
   if (!settingsColumns.some((column) => column.name === 'model_routing_json')) {

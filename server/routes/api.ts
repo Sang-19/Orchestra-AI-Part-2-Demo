@@ -33,7 +33,7 @@ import {
 } from '../orchestrator/workflowEngine';
 import { getGeminiClient, hasGeminiKey, withExponentialBackoff } from '../ai/geminiClient';
 import { normalizeModelRouting } from '../ai/modelRouter';
-import { getOllamaConfig, isOllamaProviderEnabled } from '../ai/ollamaClient';
+import { getOllamaConfig, isOllamaProviderEnabled, probeOllamaEndpoint } from '../ai/ollamaClient';
 import { hasTavilyKey } from '../orchestrator/webSearch';
 import {
   createCustomTool,
@@ -795,15 +795,37 @@ export function createApiRouter(): express.Router {
 
   router.post('/research', requireAuth, researchLimiter, async (req: AuthenticatedRequest, res) => {
     try {
-      const { question, mode, includeWeb, includeRag, collectionIds, maxRetries } = req.body as {
+      const { question, mode, includeWeb, includeRag, collectionIds, maxRetries, provider } = req.body as {
         question?: string;
         mode?: 'standard' | 'deep' | 'document_focused';
         includeWeb?: boolean;
         includeRag?: boolean;
         collectionIds?: string[];
         maxRetries?: number;
+        provider?: 'gemini' | 'ollama';
       };
 
+      if (provider === 'ollama') {
+        const ollama = await probeOllamaEndpoint(getOllamaConfig().baseUrl);
+        if (!ollama.ok) {
+          res.status(503).json({ error: `${ollama.message} Start Ollama on the Orchestra server and try again.` });
+          return;
+        }
+        if (ollama.models.length === 0) {
+          res.status(400).json({ error: 'Ollama is reachable, but no local models are installed. Run `ollama pull ' + getOllamaConfig().model + '` and try again.' });
+          return;
+        }
+        const hasConfiguredModel = (name: string) => ollama.models.some((installed) => installed === name || installed.startsWith(name + ':'));
+        if (!hasConfiguredModel(getOllamaConfig().model)) {
+          res.status(400).json({ error: `Ollama is connected, but model "${getOllamaConfig().model}" is not installed. Available models: ${ollama.models.join(', ')}.` });
+          return;
+        }
+        const needsRag = includeRag ?? getUserSettings(req.user!.id).includeRagDefault;
+        if (needsRag && !hasConfiguredModel(getOllamaConfig().embedModel)) {
+          res.status(400).json({ error: `Ollama embedding model "${getOllamaConfig().embedModel}" is not installed. Run ollama pull ${getOllamaConfig().embedModel} or disable the Knowledge Base option.` });
+          return;
+        }
+      }
       const session = await createAndPlanResearch({
         userId: req.user!.id,
         question: question ?? '',
@@ -812,6 +834,7 @@ export function createApiRouter(): express.Router {
         includeRag,
         collectionIds,
         maxRetries,
+        provider,
       });
 
       res.status(201).json({ session });
@@ -911,7 +934,7 @@ export function createApiRouter(): express.Router {
   router.post('/research/:id/stop', requireAuth, (req: AuthenticatedRequest, res) => {
     try {
       const session = stopResearchExecution({ sessionId: String(req.params.id), userId: req.user!.id });
-      res.json({ session, requested: session.status === 'running' });
+      res.json({ session, requested: session.status === 'running' || session.status === 'planning' });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to stop workflow.' });
     }
