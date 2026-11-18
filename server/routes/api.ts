@@ -795,13 +795,14 @@ export function createApiRouter(): express.Router {
 
   router.post('/research', requireAuth, researchLimiter, async (req: AuthenticatedRequest, res) => {
     try {
-      const { question, mode, includeWeb, includeRag, collectionIds, maxRetries } = req.body as {
+      const { question, mode, includeWeb, includeRag, collectionIds, maxRetries, provider } = req.body as {
         question?: string;
         mode?: 'standard' | 'deep' | 'document_focused';
         includeWeb?: boolean;
         includeRag?: boolean;
         collectionIds?: string[];
         maxRetries?: number;
+        provider?: 'gemini' | 'ollama';
       };
 
       const session = await createAndPlanResearch({
@@ -812,6 +813,7 @@ export function createApiRouter(): express.Router {
         includeRag,
         collectionIds,
         maxRetries,
+        provider,
       });
 
       res.status(201).json({ session });
