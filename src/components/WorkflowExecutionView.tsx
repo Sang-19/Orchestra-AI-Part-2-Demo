@@ -279,7 +279,8 @@ export function WorkflowExecutionView({
     ? 'human_approval' as AgentId
     : latestAgentStart?.agentId ?? null;
   const agentElapsedSeconds = latestAgentStart ? Math.max(0, Math.floor((clockNow - new Date(latestAgentStart.createdAt).getTime()) / 1000)) : 0;
-  const agentTimedOut = Boolean(latestAgentStart && agentElapsedSeconds >= 90 && ['planning', 'running'].includes(session.status));
+  const requestTimeoutMs = Number(latestAgentStart?.payload?.timeoutMs) || 90_000;
+  const agentTimedOut = Boolean(latestAgentStart && agentElapsedSeconds * 1000 >= requestTimeoutMs && ['planning', 'running'].includes(session.status));
   const sources = session.checkpoint?.sources ?? [];
   const claims = session.checkpoint?.claims ?? [];
   const canViewReport =
@@ -304,7 +305,7 @@ export function WorkflowExecutionView({
           {latestAgentStart && ['planning', 'running'].includes(session.status) && (
             <div className={`mt-3 flex flex-wrap items-center gap-2 text-xs ${agentTimedOut ? 'text-red-700' : 'text-slate-600'}`} role="status" aria-live="polite">
               <span className={`inline-block h-2 w-2 rounded-full ${agentTimedOut ? 'bg-red-600' : 'bg-blue-600 animate-pulse'}`} />
-              <span>{latestAgentStart.agentId?.replace(/_/g, ' ')} {agentTimedOut ? 'has exceeded the 90-second request budget; waiting for timeout recovery.' : 'is executing'} · {Math.floor(agentElapsedSeconds / 60)}m {agentElapsedSeconds % 60}s elapsed</span>
+              <span>{latestAgentStart.agentId?.replace(/_/g, ' ')} {agentTimedOut ? 'has exceeded the 90-second request budget; waiting for the backend timeout and retry handler.' : 'is executing'} · {Math.floor(agentElapsedSeconds / 60)}m {agentElapsedSeconds % 60}s elapsed</span>
             </div>
           )}
         </div>
