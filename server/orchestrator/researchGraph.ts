@@ -312,6 +312,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'planner',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: state.plannerFeedback
         ? `Planner Agent revising research plan with feedback: "${state.plannerFeedback}"`
         : 'Planner Agent decomposing research question into structured subtopics.',
