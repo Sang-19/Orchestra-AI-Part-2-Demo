@@ -581,7 +581,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     emit({
       sessionId: state.sessionId,
       eventType: 'agent_started',
-      agentId: 'evidence_extraction';
+      agentId: 'evidence_extraction',
       payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: `Extracting atomic factual claims from ${state.sources.length} aggregated sources.`,
     });
@@ -607,7 +607,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
     return {
       claims,
       currentStep: 'fact_checker',
-      completedAgents: ['evidence_extraction'],
+      completedAgents: ['researcher', 'evidence_extraction'],
     };
   };
 
