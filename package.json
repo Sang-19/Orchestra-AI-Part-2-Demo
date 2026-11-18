@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "dev:frontend": "vite --host 0.0.0.0 --port 5173 --strictPort",
-    "dev:backend": "bun run server.ts",
+    "dev:backend": "tsx server.ts",
     "start": "bun run server.ts",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
