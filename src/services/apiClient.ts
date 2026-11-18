@@ -295,6 +295,14 @@ export const apiClient = {
     });
   },
 
+  pauseResearch(id: string) {
+    return apiFetch<{ session: ResearchSession; requested: boolean }>(`/research/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+  },
+
+  stopResearch(id: string) {
+    return apiFetch<{ session: ResearchSession; requested: boolean }>(`/research/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+  },
+
   resumeResearch(id: string) {
     return apiFetch<{ session: ResearchSession }>(`/research/${encodeURIComponent(id)}/resume`, {
       method: 'POST',
