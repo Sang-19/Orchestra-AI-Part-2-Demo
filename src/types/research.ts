@@ -20,6 +20,7 @@ export type ResearchStatus =
   | 'awaiting_approval'
   | 'running'
   | 'paused'
+  | 'stopped'
   | 'rejected'
   | 'completed'
   | 'completed_with_warnings'
@@ -250,7 +251,8 @@ export interface ExecutionEvent {
     | 'approval_required'
     | 'execution_completed'
     | 'execution_failed'
-    | 'execution_paused';
+    | 'execution_paused'
+    | 'execution_stopped';
   agentId: AgentId | null;
   message: string;
   payload: Record<string, unknown> | null;

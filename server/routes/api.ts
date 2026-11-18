@@ -27,6 +27,8 @@ import {
   mapSessionRow,
   rejectResearchPlan,
   resumeResearchExecution,
+  pauseResearchExecution,
+  stopResearchExecution,
   sessionBus,
 } from '../orchestrator/workflowEngine';
 import { getGeminiClient, hasGeminiKey, withExponentialBackoff } from '../ai/geminiClient';
@@ -894,6 +896,24 @@ export function createApiRouter(): express.Router {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'Unable to reject research plan.',
       });
+    }
+  });
+
+  router.post('/research/:id/pause', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const session = pauseResearchExecution({ sessionId: String(req.params.id), userId: req.user!.id });
+      res.json({ session, requested: true });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to pause workflow.' });
+    }
+  });
+
+  router.post('/research/:id/stop', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const session = stopResearchExecution({ sessionId: String(req.params.id), userId: req.user!.id });
+      res.json({ session, requested: session.status === 'running' });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to stop workflow.' });
     }
   });
 
