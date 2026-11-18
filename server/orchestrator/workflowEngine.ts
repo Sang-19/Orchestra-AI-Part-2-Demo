@@ -17,6 +17,7 @@ import { getSqliteCheckpointer } from './sqliteCheckpointer';
 import { runWithModelRouting, DEFAULT_AGENT_MODEL_ROUTING, normalizeModelRouting } from '../ai/modelRouter';
 import type {
   AgentId,
+  AIProvider,
   ExecutionEvent,
   ResearchMode,
   ResearchPlan,
@@ -220,6 +221,7 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
     userId: String(row.user_id),
     question: String(row.question),
     mode: row.mode as ResearchMode,
+    provider: (row.provider as AIProvider | undefined) ?? 'gemini',
     status: row.status as ResearchStatus,
     includeWeb: Boolean(row.include_web),
     includeRag: Boolean(row.include_rag),
@@ -253,11 +255,12 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
  * Streams a LangGraph invocation or resumption while projecting each state transition
  * into `research_sessions` for real-time API & frontend visibility.
  */
-async function runGraphStreamAndSync(params: { sessionId: string; userId: string; input: Record<string, unknown> | Command | null }): Promise<void> {
+async function runGraphStreamAndSync(params: { sessionId: string; userId: string; input: Record<string, unknown> | Command | null; provider?: AIProvider }): Promise<void> {
   const graph = buildWorkflowGraph();
   const config = makeThreadConfig(params.sessionId, params.userId);
   let latestState: OrchestraGraphState | null = null;
   try {
+    const selectedProvider = params.provider ?? getResearchSession(params.sessionId, params.userId)?.provider ?? 'gemini';
     await runWithModelRouting(getUserSettings(params.userId).modelRouting, async () => {
       const stream = await graph.stream(params.input as never, { ...config, streamMode: 'values' });
       for await (const snapshot of stream) {
@@ -299,7 +302,7 @@ async function runGraphStreamAndSync(params: { sessionId: string; userId: string
         return;
       }
       saveSessionProjection({ sessionId: params.sessionId, status: finalValues.status, checkpoint: projected, completedAt: new Date().toISOString(), errorMessage: finalValues.errorMessage });
-    });
+    }, selectedProvider);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected LangGraph execution error.';
     const current = getResearchSession(params.sessionId, params.userId);
@@ -317,6 +320,7 @@ export async function createAndPlanResearch(params: {
   includeRag?: boolean;
   collectionIds?: string[];
   maxRetries?: number;
+  provider?: AIProvider;
 }): Promise<ResearchSession> {
   const validation = validateResearchInput(params.question);
   if (!validation.valid) {
@@ -329,6 +333,7 @@ export async function createAndPlanResearch(params: {
   const includeWeb = params.includeWeb ?? settings.includeWebDefault;
   const includeRag = params.includeRag ?? settings.includeRagDefault;
   const collectionIds = params.collectionIds ?? [];
+  const provider: AIProvider = params.provider === 'ollama' ? 'ollama' : 'gemini';
 
   if (!includeWeb && !includeRag) {
     throw new Error('Select at least one knowledge source (Web Search or Knowledge Base).');
@@ -341,14 +346,15 @@ export async function createAndPlanResearch(params: {
 
   db.prepare(`
     INSERT INTO research_sessions (
-      id, user_id, question, mode, status, include_web, include_rag, collection_ids_json,
+      id, user_id, question, mode, provider, status, include_web, include_rag, collection_ids_json,
       max_retries, retry_count, current_agent, checkpoint_json, started_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'planning', ?, ?, ?, ?, 0, 'input_validation', ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'planning', ?, ?, ?, ?, 0, 'input_validation', ?, ?, ?, ?)
   `).run(
     sessionId,
     params.userId,
     params.question.trim(),
     mode,
+    provider,
     includeWeb ? 1 : 0,
     includeRag ? 1 : 0,
     JSON.stringify(collectionIds),
@@ -363,6 +369,7 @@ export async function createAndPlanResearch(params: {
   await runGraphStreamAndSync({
     sessionId,
     userId: params.userId,
+    provider,
     input: {
       sessionId,
       userId: params.userId,
