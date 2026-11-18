@@ -1,6 +1,8 @@
-# Build the frontend with the same Bun lockfile used by local development.
-FROM oven/bun:1.3.5 AS builder
+# Build stage
+FROM oven/bun:1.4.3 AS builder
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends python3 build-essential && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
@@ -8,9 +10,12 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-# Bun runs the TypeScript server directly; tsx is not required in the runtime image.
-FROM oven/bun:1.3.5 AS runner
+# Runtime stage
+FROM oven/bun:1.4.3 AS runner
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends python3 build-essential && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV PORT=3000
 
