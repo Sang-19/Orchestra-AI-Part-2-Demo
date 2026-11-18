@@ -183,10 +183,11 @@ export async function embedTexts(texts: string[]): Promise<{
   embeddings: number[][];
   model: string;
 }> {
+  const useOllamaEmbeddings = getActiveLLMProvider() === 'ollama' || isOllamaEmbeddingEnabled();
   if (texts.length === 0) {
-    return { embeddings: [], model: isOllamaEmbeddingEnabled() ? `ollama:${process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'}` : 'gemini-embedding-2' };
+    return { embeddings: [], model: useOllamaEmbeddings ? `ollama:${process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'}` : 'gemini-embedding-2' };
   }
-  if (isOllamaEmbeddingEnabled()) {
+  if (useOllamaEmbeddings) {
     return withExponentialBackoff(() => ollamaEmbedTexts(texts));
   }
   const ai = getGeminiClient();
