@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Orchestra AI - Shutdown
+title Orchestra AI - Stop Frontend and Backend
 
 cd /d "%~dp0"
 
@@ -23,8 +23,8 @@ if not exist "docker-compose.yml" (
     exit /b 1
 )
 
-echo [INFO] Stopping Orchestra AI containers...
-docker compose stop
+echo [INFO] Stopping the separate frontend and backend services...
+docker compose stop frontend backend
 if errorlevel 1 (
     echo.
     echo [ERROR] Docker Compose could not stop the application.
@@ -34,8 +34,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [SUCCESS] Orchestra AI has been stopped.
-echo Your containers and database volume have been preserved.
+echo [SUCCESS] Frontend and backend have both been stopped.
+echo Your containers and SQLite database volume have been preserved.
 echo Run start.bat to start the application again.
 echo.
 pause
