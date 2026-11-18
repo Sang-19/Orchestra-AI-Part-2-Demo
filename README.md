@@ -23,6 +23,18 @@ Orchestra AI is a full-stack autonomous research platform that coordinates speci
 
 ## Local Development
 
+### Recommended: separate frontend and backend containers (Windows)
+
+Run `start.bat`. Docker Compose starts two independent services and opens two CMD log windows automatically:
+
+- **Frontend** — Vite + React at `http://localhost:5173` (HMR enabled; frontend logs in its own CMD window).
+- **Backend** — Express + LangGraph + SQLite API at `http://localhost:3000` (backend logs in its own CMD window).
+- Browser requests to `/api` and SSE endpoints are proxied by Vite to the backend container. The browser uses one origin, so API calls and authentication cookies continue to work without frontend CORS configuration.
+
+Run `stop.bat` to stop both services. The named `orchestra_data` SQLite volume is preserved.
+
+### Alternative: embedded single-process development
+
 ```bash
 npm install
 cp .env.example .env
@@ -30,7 +42,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:3000`. A seeded sample researcher account (`researcher@orchestra.ai` / `Orchestra2026!`) is included for immediate exploration alongside full self-service registration.
+This legacy convenience mode serves Vite through Express at `http://localhost:3000`.
 
 ## Per-Agent Model Routing
 
@@ -44,8 +56,6 @@ npm test
 npm run build
 ```
 
-## Docker Deployment
+## Docker Services
 
-```bash
-docker compose up --build -d
-```
+Compose runs independent `backend` and `frontend` services. The backend image is defined in `backend/Dockerfile`; the Vite frontend image is defined in `frontend/Dockerfile`. The backend persists SQLite data in the named `orchestra_data` volume. To start both services manually, run `docker compose up --build -d backend frontend`; to inspect logs, run `docker compose logs -f backend` or `docker compose logs -f frontend`.

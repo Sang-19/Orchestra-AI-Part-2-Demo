@@ -1,15 +1,15 @@
 @echo off
 setlocal EnableExtensions
-title Orchestra AI - Startup Diagnostics
+title Orchestra AI - Startup
 cd /d "%~dp0"
 
 echo.
 echo ==================================================
-echo           ORCHESTRA AI - STARTUP CHECKS
+echo       ORCHESTRA AI - SPLIT SERVICE STARTUP
 echo ==================================================
 echo.
 
-echo [1/8] Checking Docker CLI...
+echo [1/7] Checking Docker CLI...
 where docker >nul 2>&1
 if errorlevel 1 (
     echo [FAIL] Docker CLI not found. Install Docker Desktop and retry.
@@ -19,22 +19,24 @@ if errorlevel 1 (
 echo [PASS] Docker CLI found.
 
 echo.
-echo [2/8] Checking environment configuration...
+echo [2/7] Checking environment configuration...
 if not exist ".env" (
     if exist ".env.example" (
         copy ".env.example" ".env" >nul
         echo [ACTION REQUIRED] Created .env from .env.example.
-        echo Add your GEMINI_API_KEY, save the file, and run start.bat again.
+        echo Add your API keys, save the file, and run start.bat again.
+        pause
+        exit /b 1
     ) else (
         echo [FAIL] .env and .env.example are both missing.
+        pause
+        exit /b 1
     )
-    pause
-    exit /b 1
 )
-echo [PASS] .env file found. (Secret values are not displayed.)
+echo [PASS] .env file found. Secret values will not be displayed.
 
 echo.
-echo [3/8] Checking Docker Engine...
+echo [3/7] Checking Docker Engine...
 docker info >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Starting Docker Desktop...
@@ -64,78 +66,76 @@ if errorlevel 1 (
 echo [PASS] Docker Engine is ready.
 
 echo.
-echo [4/8] Validating Docker Compose configuration...
+echo [4/7] Validating split frontend/backend Compose configuration...
 docker compose config --quiet
 if errorlevel 1 (
-    echo [FAIL] docker-compose.yml or .env configuration is invalid.
+    echo [FAIL] Docker Compose configuration is invalid.
     pause
     exit /b 1
 )
 echo [PASS] Compose configuration is valid.
 
 echo.
-echo [5/8] Building frontend and backend container...
-echo [INFO] Build output will appear below.
-docker compose up --build -d
+echo [5/7] Building and starting BACKEND + FRONTEND containers...
+docker compose up --build -d --remove-orphans backend frontend
 if errorlevel 1 (
-    echo [FAIL] Image build or container startup failed.
-    echo [TIP] Review the Docker error above. You can also run: docker compose logs
+    echo [FAIL] One or more services failed to start.
+    echo [INFO] Inspect with: docker compose logs --tail=100 backend frontend
     pause
     exit /b 1
 )
-echo [PASS] Docker Compose accepted the build and startup command.
+echo [PASS] Both service startup commands were accepted.
 
 echo.
-echo [6/8] Checking container state...
-docker compose ps
-
-echo.
-echo [7/8] Waiting for backend and database health (up to 120 seconds)...
-set "APP_READY="
+echo [6/7] Waiting for backend API health (up to 120 seconds)...
+set "BACKEND_READY="
 for /L %%I in (1,1,60) do (
-    if not defined APP_READY (
+    if not defined BACKEND_READY (
         powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 3; if ($r.status -eq 'ok' -and $r.database -eq 'connected') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-        if not errorlevel 1 (set "APP_READY=1") else (timeout /t 2 /nobreak >nul)
+        if not errorlevel 1 (set "BACKEND_READY=1") else (timeout /t 2 /nobreak >nul)
     )
 )
-if not defined APP_READY (
+if not defined BACKEND_READY (
     echo [FAIL] Backend/database health check did not pass.
-    echo [INFO] Recent container logs:
-    docker compose logs --tail=80
+    docker compose logs --tail=80 backend
     pause
     exit /b 1
 )
-echo [PASS] Backend API responds and database query succeeded.
+echo [PASS] Backend API and SQLite are healthy.
 
 echo.
-echo [8/9] Checking frontend page response...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:3000/' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-if errorlevel 1 (
-    echo [FAIL] Frontend page did not return HTTP 200.
-    echo [INFO] Backend is healthy, but check the frontend build and container logs.
-    docker compose logs --tail=80
+echo [7/7] Waiting for frontend Vite server (up to 120 seconds)...
+set "FRONTEND_READY="
+for /L %%I in (1,1,60) do (
+    if not defined FRONTEND_READY (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://localhost:5173/' -TimeoutSec 3; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+        if not errorlevel 1 (set "FRONTEND_READY=1") else (timeout /t 2 /nobreak >nul)
+    )
+)
+if not defined FRONTEND_READY (
+    echo [FAIL] Frontend did not return HTTP 200.
+    docker compose logs --tail=80 frontend
     pause
     exit /b 1
 )
-echo [PASS] Frontend page returned HTTP 200.
+echo [PASS] Frontend Vite server is responding.
 
-echo.
-echo [9/9] Opening application and live backend logs...
-echo [PASS] Frontend is being served by the backend at http://localhost:3000
-start "" "http://localhost:3000"
-start "Orchestra AI - Live Logs" cmd /k "cd /d ""%~dp0"" && docker compose logs --follow --no-color"
+echo [INFO] Opening Backend CMD and Frontend CMD windows...
+start "Orchestra AI - BACKEND" cmd /k "cd /d ""%~dp0"" && title Orchestra AI - BACKEND && echo ==== BACKEND API + LANGGRAPH LOGS ==== && docker compose logs --follow --no-color backend"
+start "Orchestra AI - FRONTEND" cmd /k "cd /d ""%~dp0"" && title Orchestra AI - FRONTEND && echo ==== FRONTEND VITE + HMR LOGS ==== && docker compose logs --follow --no-color frontend"
+start "" "http://localhost:5173"
 
 echo.
 echo ==================================================
 echo          ORCHESTRA AI STARTUP COMPLETE
 echo ==================================================
-echo Frontend:  http://localhost:3000
-echo API check: http://localhost:3000/api/health
-echo Live logs: Separate CMD window
+echo Frontend:  http://localhost:5173
+echo Backend:   http://localhost:3000
+echo API health: http://localhost:3000/api/health
+echo Backend and frontend logs are in separate CMD windows.
 echo.
-echo Note: Startup checks confirm service readiness, not every AI feature.
-echo Run a sample research workflow to verify Gemini, Tavily, RAG and agents.
-echo Close the live-log window when finished. Use stop.bat to stop services.
+echo Use stop.bat to stop both services. SQLite data is preserved.
+echo ==================================================
 echo.
 pause
 endlocal
