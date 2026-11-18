@@ -805,6 +805,17 @@ export function createApiRouter(): express.Router {
         provider?: 'gemini' | 'ollama';
       };
 
+      if (provider === 'ollama') {
+        const ollama = await probeOllamaEndpoint(getOllamaConfig().baseUrl);
+        if (!ollama.ok) {
+          res.status(503).json({ error: `${ollama.message} Start Ollama on the Orchestra server and try again.` });
+          return;
+        }
+        if (ollama.models.length > 0 && !ollama.models.includes(getOllamaConfig().model)) {
+          res.status(400).json({ error: `Ollama is connected, but model "${getOllamaConfig().model}" is not installed. Available models: ${ollama.models.join(', ')}.` });
+          return;
+        }
+      }
       const session = await createAndPlanResearch({
         userId: req.user!.id,
         question: question ?? '',
@@ -913,7 +924,7 @@ export function createApiRouter(): express.Router {
   router.post('/research/:id/stop', requireAuth, (req: AuthenticatedRequest, res) => {
     try {
       const session = stopResearchExecution({ sessionId: String(req.params.id), userId: req.user!.id });
-      res.json({ session, requested: session.status === 'running' });
+      res.json({ session, requested: session.status === 'running' || session.status === 'planning' });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Unable to stop workflow.' });
     }
