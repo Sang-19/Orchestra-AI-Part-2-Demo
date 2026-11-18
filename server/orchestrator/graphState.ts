@@ -2,6 +2,7 @@ import { Annotation } from '@langchain/langgraph';
 import { deduplicateAndNumberSources } from '../tools/researchTools';
 import type {
   AgentId,
+  ExecutionCycleState,
   ClaimRecord,
   ContradictionRecord,
   GroundednessResult,
@@ -32,14 +33,14 @@ export function mergeSourcesReducer(
   return deduplicateAndNumberSources(updatedExisting, right);
 }
 
-export function mergeCompletedAgentsReducer(
-  left: AgentId[],
-  right: AgentId[]
-): AgentId[] {
+/** Merge concurrent Send() deltas; a retry cycle supplies its own empty baseline. */
+export function mergeCompletedAgentsReducer(left: AgentId[], right: AgentId[]): AgentId[] {
   if (!right || right.length === 0) return left;
-  const set = new Set<AgentId>(left);
-  for (const id of right) set.add(id);
-  return Array.from(set);
+  return Array.from(new Set<AgentId>([...left, ...right]));
+}
+
+export function createExecutionCycle(cycleNumber: number, activeAgent: AgentId | null, status: ResearchStatus, completedAgents: AgentId[] = [], failedAgents: AgentId[] = []): ExecutionCycleState {
+  return { cycleNumber, activeAgent, completedAgents: Array.from(new Set(completedAgents)), failedAgents: Array.from(new Set(failedAgents)), status };
 }
 
 export function mergeStringsReducer(left: string[], right: string[]): string[] {
@@ -85,6 +86,10 @@ export const OrchestraStateAnnotation = Annotation.Root({
   }),
 
   // Execution lifecycle tracking
+  executionCycle: Annotation<ExecutionCycleState>({
+    reducer: (_left, right) => right,
+    default: () => createExecutionCycle(1, 'input_validation', 'planning'),
+  }),
   status: Annotation<ResearchStatus>({
     reducer: (_left, right) => right,
     default: () => 'planning',
@@ -211,7 +216,8 @@ export function projectGraphStateToCheckpoint(state: OrchestraGraphState): Workf
   return {
     sessionId: state.sessionId,
     currentStep: state.currentStep,
-    completedAgents: state.completedAgents,
+    completedAgents: state.executionCycle?.completedAgents ?? state.completedAgents,
+    executionCycle: state.executionCycle ?? createExecutionCycle(state.retryCount + 1, state.currentStep, state.status, state.completedAgents),
     retryCount: state.retryCount,
     maxRetries: state.maxRetries,
     plan: state.plan,
