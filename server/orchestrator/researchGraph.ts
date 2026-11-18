@@ -962,7 +962,6 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
           routeAction: route.action,
           status: 'running',
           currentStep: 'research_coordinator',
-          completedAgents: ['quality_evaluator'],
         },
       });
     }
