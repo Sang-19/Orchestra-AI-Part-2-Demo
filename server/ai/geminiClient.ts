@@ -1,5 +1,5 @@
 import { GoogleGenAI, ThinkingLevel, type Schema } from '@google/genai';
-import { getModelCandidates, isModelFallbackWorthy, isRetryableServerError, type ModelRole } from './modelRouter';
+import { getActiveLLMProvider, getModelCandidates, isModelFallbackWorthy, isRetryableServerError, type ModelRole } from './modelRouter';
 import {
   isOllamaProviderEnabled,
   ollamaEmbedTexts,
@@ -89,7 +89,8 @@ export async function generateStructuredJson<T>(params: {
   thinkingLevel?: ThinkingLevel;
   modelRole: ModelRole;
 }): Promise<T> {
-  if (isOllamaProviderEnabled()) {
+  const request = async (): Promise<T> => {
+  if (getActiveLLMProvider() === 'ollama' || isOllamaProviderEnabled()) {
     return withExponentialBackoff(() =>
       ollamaGenerateStructuredJson<T>({
         systemInstruction: params.systemInstruction,
@@ -118,6 +119,19 @@ export async function generateStructuredJson<T>(params: {
     throw new Error('Gemini returned an empty structured response.');
   }
   return JSON.parse(rawText) as T;
+  };
+  const timeoutMs = Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`AI agent request timed out after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function generateSearchGroundedFindings(params: {
