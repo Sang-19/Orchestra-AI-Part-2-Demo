@@ -365,10 +365,9 @@ export async function createAndPlanResearch(params: {
     now
   );
 
-  // Execute LangGraph from START until it pauses at the `human_approval` interrupt()
+  // Start the graph in the background so the UI can subscribe to live events immediately.
   activeRuns.add(sessionId);
-  try {
-    await runGraphStreamAndSync({
+  void runGraphStreamAndSync({
     sessionId,
     userId: params.userId,
     provider,
@@ -385,10 +384,9 @@ export async function createAndPlanResearch(params: {
       reportTone: settings.reportTone,
       citationStyle: settings.citationStyle,
     },
-    });
-  } finally {
+  }).finally(() => {
     activeRuns.delete(sessionId);
-  }
+  });
 
   return getResearchSession(sessionId, params.userId)!;
 }
