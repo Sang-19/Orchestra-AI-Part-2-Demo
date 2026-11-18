@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { GEMINI_MODEL_OPTIONS, type AgentModelRouting, type GeminiModelId } from '../../src/types/research';
+import { GEMINI_MODEL_OPTIONS, type AgentModelRouting, type GeminiModelId, type AIProvider } from '../../src/types/research';
 
 export type ModelRole = keyof AgentModelRouting;
 
@@ -29,7 +29,7 @@ const FALLBACK_MODELS: Record<ModelRole, GeminiModelId[]> = {
   qualityEvaluator: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
 };
 
-const routingContext = new AsyncLocalStorage<Partial<AgentModelRouting>>();
+const routingContext = new AsyncLocalStorage<{ routing: Partial<AgentModelRouting>; provider: AIProvider }>();
 
 export function normalizeModelRouting(input: unknown, base: AgentModelRouting = DEFAULT_AGENT_MODEL_ROUTING): AgentModelRouting {
   const allowed = new Set<string>(GEMINI_MODEL_OPTIONS.map((option) => option.value));
@@ -42,12 +42,18 @@ export function normalizeModelRouting(input: unknown, base: AgentModelRouting = 
   return result;
 }
 
-export function runWithModelRouting<T>(routing: Partial<AgentModelRouting>, callback: () => T): T {
-  return routingContext.run(routing, callback);
+export function runWithModelRouting<T>(routing: Partial<AgentModelRouting>, callback: () => T, provider: AIProvider = 'gemini'): T {
+  return routingContext.run({ routing, provider }, callback);
+}
+
+export function getActiveLLMProvider(): AIProvider {
+  const contextualProvider = routingContext.getStore()?.provider;
+  if (contextualProvider) return contextualProvider;
+  return (process.env.LLM_PROVIDER || '').trim().toLowerCase() === 'ollama' ? 'ollama' : 'gemini';
 }
 
 export function getModelCandidates(role: ModelRole): GeminiModelId[] {
-  const contextOverride = routingContext.getStore()?.[role];
+  const contextOverride = routingContext.getStore()?.routing?.[role];
   const envKey = `GEMINI_MODEL_${role.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
   const envOverride = process.env[envKey]?.trim();
   const primary = contextOverride || (envOverride as GeminiModelId | undefined) || DEFAULT_AGENT_MODEL_ROUTING[role];
