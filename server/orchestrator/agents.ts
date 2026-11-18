@@ -587,14 +587,21 @@ export async function runGroundednessCheckerAgent(params: {
   );
 
   if (params.sources.length === 0 || params.claims.length === 0) {
-    return deterministicCheck;
+    return { ...deterministicCheck, validationStatus: 'complete' };
   }
 
+  // One budget covers the full model-routing/fallback sequence; graph-level retries are disabled.
+  const timeoutMs = Math.max(
+    15_000,
+    Math.min(180_000, Number(process.env.GROUNDEDNESS_TIMEOUT_MS) || 75_000)
+  );
+  let aiResult: GroundednessResult;
+  try {
     aiResult = await withTimeout(
       generateStructuredJson<GroundednessResult>({
-    systemInstruction:
-      'You are the Groundedness Checker Agent. Audit the generated report against verified claims and source citations. Flag any unsupported statements or invalid citation numbers. Never pass a report whose factual grounding falls below the threshold.',
-    prompt: `Threshold: ${params.threshold}
+        systemInstruction:
+          'You are the Groundedness Checker Agent. Audit the generated report against verified claims and source citations. Flag any unsupported statements or invalid citation numbers. Never pass a report whose factual grounding falls below the threshold.',
+        prompt: `Threshold: ${params.threshold}
 Valid Citation Numbers: ${params.sources.map((s) => s.citationNumber).join(', ')}
 
 Verified Claims:
@@ -602,15 +609,16 @@ ${params.claims.map((c) => `- (${c.verificationStatus}) ${c.statement}`).join('\
 
 Report Markdown:
 ${params.report.markdownContent.slice(0, 7000)}`,
-    schema: GROUNDEDNESS_SCHEMA,
-    modelRole: 'groundednessChecker',
-      thinkingLevel: ThinkingLevel.MEDIUM,
+        schema: GROUNDEDNESS_SCHEMA,
+        modelRole: 'groundednessChecker',
+        thinkingLevel: ThinkingLevel.MEDIUM,
       }),
       timeoutMs,
       'Groundedness Checker AI audit'
     );
   } catch (error) {
     if (!(error instanceof Error) || error.name !== 'OperationTimeoutError') throw error;
+    console.warn(`[GROUNDEDNESS] AI audit exceeded ${timeoutMs}ms; preserving deterministic checks and completing with warnings.`);
     return {
       ...deterministicCheck,
       passed: false,
@@ -619,7 +627,6 @@ ${params.report.markdownContent.slice(0, 7000)}`,
     };
   }
 
-  // Enforce strict invariant: never mark failed citation or below-threshold score as passed
   const score = Math.max(0, Math.min(1, Number(aiResult.score.toFixed(2))));
   const combinedIssues = Array.from(
     new Set([...(aiResult.citationIssues || []), ...deterministicCheck.citationIssues])
@@ -636,6 +643,7 @@ ${params.report.markdownContent.slice(0, 7000)}`,
     unsupportedStatements: aiResult.unsupportedStatements || [],
     citationIssues: combinedIssues,
     summary: aiResult.summary,
+    validationStatus: 'complete',
   };
 }
 
