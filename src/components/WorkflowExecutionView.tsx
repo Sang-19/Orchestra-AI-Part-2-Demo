@@ -285,7 +285,11 @@ export function WorkflowExecutionView({
     (evt) => evt.agentId === 'evidence_extraction' && evt.eventType === 'agent_started'
   );
   if (researcherCompletion || evidenceFanInStarted) {
-    const partialFailure = Boolean(researcherCompletion?.payload?.partialFailure);
+    // Use this cycle's branch events rather than accumulated researchGaps, which may
+    // contain failures from an earlier retry that has since recovered.
+    const partialFailure = cycleEvents.some(
+      (evt) => evt.agentId === 'researcher' && evt.eventType === 'agent_progress' && evt.payload?.failed === true
+    );
     if (partialFailure) {
       completedSet.delete('researcher');
       failedSet.add('researcher');
