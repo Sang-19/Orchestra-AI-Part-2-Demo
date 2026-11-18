@@ -34,6 +34,16 @@ export default defineConfig(() => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 5173,
+      strictPort: true,
+      // In split Docker mode, browser requests to /api are proxied to the backend service.
+      proxy: {
+        '/api': {
+          target: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3000',
+          changeOrigin: true,
+        },
+      },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
