@@ -449,14 +449,16 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'research_coordinator',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: `Coordinating parallel research across ${subtopics.length} subtopics (cycle ${state.retryCount + 1}).`,
-      payload: { subtopicCount: subtopics.length, cycle: state.retryCount + 1 },
+      payload: { subtopicCount: subtopics.length, cycle: state.retryCount + 1, timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
     });
 
     emit({
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'researcher',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Dispatching concurrent LangGraph Send() researcher branches.',
     });
 
@@ -559,6 +561,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'evidence_extraction',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: `Extracting atomic factual claims from ${state.sources.length} aggregated sources.`,
     });
 
@@ -595,6 +598,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'fact_checker',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Comparing claims against source passages and assigning calibrated confidence scores.',
     });
 
@@ -630,6 +634,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'source_credibility',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Grading source authority, primary vs. secondary status, and publication recency.',
     });
 
@@ -661,6 +666,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'contradiction_checker',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: state.contradictionRechecked
         ? 'Re-checking conflicting claims across retrieved evidence.'
         : 'Detecting and preserving conflicting claims across retrieved evidence.',
@@ -702,6 +708,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'summarizer',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Synthesizing topic-wise findings and knowledge gaps.',
     });
 
@@ -743,6 +750,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'writer',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message:
         state.rewriteInstructions.length > 0
           ? 'Rewriting unsupported report sections and repairing citation references.'
@@ -793,6 +801,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'groundedness_checker',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Auditing report statements and citations against verified claims.',
     });
 
@@ -865,6 +874,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'quality_evaluator',
+      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: 'Evaluating overall completeness and selecting conditional LangGraph route.',
     });
 
