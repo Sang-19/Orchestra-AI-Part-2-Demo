@@ -18,6 +18,7 @@ export function StatusLabel({ status }: { status: ResearchSession['status'] }) {
     awaiting_approval: { label: 'Awaiting Approval', className: 'text-amber-700' },
     running: { label: 'Running', className: 'text-blue-700' },
     paused: { label: 'Paused Checkpoint', className: 'text-amber-700' },
+    stopped: { label: 'Stopped', className: 'text-slate-600' },
     rejected: { label: 'Rejected', className: 'text-slate-600' },
     completed: { label: 'Verified Complete', className: 'text-emerald-700' },
     completed_with_warnings: { label: 'Complete (Warnings)', className: 'text-amber-700' },
