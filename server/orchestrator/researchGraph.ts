@@ -449,7 +449,6 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       sessionId: state.sessionId,
       eventType: 'agent_started',
       agentId: 'research_coordinator',
-      payload: { timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
       message: `Coordinating parallel research across ${subtopics.length} subtopics (cycle ${state.retryCount + 1}).`,
       payload: { subtopicCount: subtopics.length, cycle: state.retryCount + 1, timeoutMs: Math.max(10_000, Number(process.env.AGENT_REQUEST_TIMEOUT_MS) || 90_000) },
     });
