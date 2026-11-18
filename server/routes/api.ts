@@ -33,7 +33,7 @@ import {
 } from '../orchestrator/workflowEngine';
 import { getGeminiClient, hasGeminiKey, withExponentialBackoff } from '../ai/geminiClient';
 import { normalizeModelRouting } from '../ai/modelRouter';
-import { getOllamaConfig, isOllamaProviderEnabled } from '../ai/ollamaClient';
+import { getOllamaConfig, isOllamaProviderEnabled, probeOllamaEndpoint } from '../ai/ollamaClient';
 import { hasTavilyKey } from '../orchestrator/webSearch';
 import {
   createCustomTool,
@@ -811,7 +811,11 @@ export function createApiRouter(): express.Router {
           res.status(503).json({ error: `${ollama.message} Start Ollama on the Orchestra server and try again.` });
           return;
         }
-        if (ollama.models.length > 0 && !ollama.models.includes(getOllamaConfig().model)) {
+        if (ollama.models.length === 0) {
+          res.status(400).json({ error: 'Ollama is reachable, but no local models are installed. Run `ollama pull ' + getOllamaConfig().model + '` and try again.' });
+          return;
+        }
+        if (!ollama.models.includes(getOllamaConfig().model)) {
           res.status(400).json({ error: `Ollama is connected, but model "${getOllamaConfig().model}" is not installed. Available models: ${ollama.models.join(', ')}.` });
           return;
         }
