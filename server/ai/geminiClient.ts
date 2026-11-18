@@ -71,6 +71,9 @@ async function generateWithModelFallback<T>(role: ModelRole, request: (model: st
           return await request(model);
         } catch (retryError) {
           lastError = retryError;
+          if (!isModelFallbackWorthy(retryError) || index === candidates.length - 1) {
+            throw retryError;
+          }
         }
       }
       console.warn(`[MODEL_ROUTER] ${role}: ${model} unavailable; falling back to ${candidates[index + 1]}.`);
