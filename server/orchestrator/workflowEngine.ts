@@ -14,6 +14,7 @@ import {
   type GraphEventPayload,
 } from './researchGraph';
 import { getSqliteCheckpointer } from './sqliteCheckpointer';
+import { runWithModelRouting, DEFAULT_AGENT_MODEL_ROUTING, normalizeModelRouting } from '../ai/modelRouter';
 import type {
   AgentId,
   ExecutionEvent,
@@ -155,6 +156,7 @@ export function getUserSettings(userId: string): UserSettings {
         include_rag_default: number;
         notify_on_complete: number;
         notify_on_failure: number;
+        model_routing_json?: string;
         updated_at: string;
       }
     | undefined;
@@ -173,6 +175,7 @@ export function getUserSettings(userId: string): UserSettings {
       includeRagDefault: true,
       notifyOnComplete: true,
       notifyOnFailure: true,
+      modelRouting: DEFAULT_AGENT_MODEL_ROUTING,
       updatedAt: now,
     };
   }
@@ -188,6 +191,7 @@ export function getUserSettings(userId: string): UserSettings {
     includeRagDefault: Boolean(row.include_rag_default),
     notifyOnComplete: Boolean(row.notify_on_complete),
     notifyOnFailure: Boolean(row.notify_on_failure),
+    modelRouting: normalizeModelRouting(row.model_routing_json ? JSON.parse(row.model_routing_json) : {}),
     updatedAt: row.updated_at,
   };
 }
@@ -250,6 +254,7 @@ async function runGraphStreamAndSync(params: {
   let latestState: OrchestraGraphState | null = null;
 
   try {
+    await runWithModelRouting(getUserSettings(params.userId).modelRouting, async () => {
     const stream = await graph.stream(params.input as never, {
       ...config,
       streamMode: 'values',
@@ -303,6 +308,7 @@ async function runGraphStreamAndSync(params: {
       checkpoint: projected,
       completedAt: new Date().toISOString(),
       errorMessage: finalValues.errorMessage,
+    });
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected LangGraph execution error.';

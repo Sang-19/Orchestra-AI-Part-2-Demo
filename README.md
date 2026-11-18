@@ -6,7 +6,7 @@ Orchestra AI is a full-stack autonomous research platform that coordinates speci
 
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, Vite, buffered SSE streaming (`src/utils/sseParser.ts`)
 - **Backend**: Node.js + Express (`server.ts`, `server/routes/api.ts`), JWT authentication (`bcryptjs` + HTTP-only cookies), SQLite WAL persistence (`better-sqlite3`)
-- **AI & Orchestration**: `@google/genai` (`gemini-4-hydrogen` structured outputs, `googleSearch` grounding, `gemini-embedding-2` vectors) + optional Tavily Search API (`TAVILY_API_KEY`)
+- **AI & Orchestration**: Per-agent Gemini model routing through one `GEMINI_API_KEY`, quota-aware fallback across configured Gemini models, optional Ollama generation, independently selectable local Nomic embeddings, and optional Tavily Search API (`TAVILY_API_KEY`)
 - **Multi-Agent Pipeline**:
   1. Input Validation & Prompt-Injection Sanitization
   2. Planner Agent (generates structured subtopics & search queries)
@@ -31,6 +31,10 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. A seeded sample researcher account (`researcher@orchestra.ai` / `Orchestra2026!`) is included for immediate exploration alongside full self-service registration.
+
+## Per-Agent Model Routing
+
+Choose a primary Gemini model for each agent in Workspace Settings. All agents share one `GEMINI_API_KEY`; quota/rate-limit and unavailable-model errors trigger role-specific fallbacks. Ollama can run all text generation, or be used only for embeddings with `EMBEDDING_PROVIDER=ollama` while Gemini handles text. Docker Compose defaults to local Ollama embeddings; set `EMBEDDING_PROVIDER=gemini` to use Gemini embeddings instead.
 
 ## Verification & Testing
 

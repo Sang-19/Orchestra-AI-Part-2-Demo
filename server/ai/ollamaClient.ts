@@ -8,6 +8,11 @@ export function isOllamaProviderEnabled(): boolean {
   return (process.env.LLM_PROVIDER || '').trim().toLowerCase() === 'ollama';
 }
 
+/** Enables local Nomic embeddings while Gemini remains the text-generation provider. */
+export function isOllamaEmbeddingEnabled(): boolean {
+  return isOllamaProviderEnabled() || (process.env.EMBEDDING_PROVIDER || '').trim().toLowerCase() === 'ollama';
+}
+
 export function getOllamaConfig(): OllamaConfig {
   return {
     baseUrl: (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/+$/, ''),

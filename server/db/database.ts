@@ -72,6 +72,7 @@ function initializeSchema(db: Database.Database): void {
       include_rag_default INTEGER NOT NULL DEFAULT 1,
       notify_on_complete INTEGER NOT NULL DEFAULT 1,
       notify_on_failure INTEGER NOT NULL DEFAULT 1,
+      model_routing_json TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT NOT NULL
     );
 
@@ -223,6 +224,12 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_lg_writes_lookup
       ON langgraph_checkpoint_writes(thread_id, checkpoint_ns, checkpoint_id);
   `);
+
+  // Additive migration for existing SQLite workspaces created before model routing.
+  const settingsColumns = db.pragma('table_info(user_settings)') as Array<{ name: string }>;
+  if (!settingsColumns.some((column) => column.name === 'model_routing_json')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN model_routing_json TEXT NOT NULL DEFAULT '{}'");
+  }
 }
 
 function recoverInterruptedSessions(db: Database.Database): void {

@@ -30,6 +30,7 @@ import {
   sessionBus,
 } from '../orchestrator/workflowEngine';
 import { getGeminiClient, hasGeminiKey, withExponentialBackoff } from '../ai/geminiClient';
+import { normalizeModelRouting } from '../ai/modelRouter';
 import { getOllamaConfig, isOllamaProviderEnabled } from '../ai/ollamaClient';
 import { hasTavilyKey } from '../orchestrator/webSearch';
 import {
@@ -42,6 +43,7 @@ import {
 } from '../tools/customTools';
 import type {
   CollectionRecord,
+  UserSettings,
   DashboardStats,
   DocumentRecord,
   ExecutionEvent,
@@ -319,7 +321,7 @@ export function createApiRouter(): express.Router {
         name: 'Google Gemini Reasoning Engine',
         category: 'LLM Orchestration',
         configured: geminiConfigured,
-        mode: ollamaEnabled ? 'Standby (LLM_PROVIDER=ollama)' : 'gemini-4-hydrogen',
+        mode: ollamaEnabled ? 'Standby (LLM_PROVIDER=ollama)' : 'Per-agent Gemini model routing',
         description:
           'Powers structured planning, evidence extraction, fact checking, contradiction detection, synthesis, and groundedness validation.',
         capabilities: ['Structured JSON Schemas', 'ThinkingLevel Control', 'Report Synthesis'],
@@ -328,10 +330,12 @@ export function createApiRouter(): express.Router {
         id: 'ollama-local-llm',
         name: 'Ollama Local Model Backend',
         category: 'Local LLM Orchestration',
-        configured: ollamaEnabled,
+        configured: ollamaEnabled || process.env.EMBEDDING_PROVIDER?.trim().toLowerCase() === 'ollama',
         mode: ollamaEnabled
           ? `${ollamaCfg.model} @ ${ollamaCfg.baseUrl}`
-          : `Optional (set LLM_PROVIDER=ollama in .env)`,
+          : process.env.EMBEDDING_PROVIDER?.trim().toLowerCase() === 'ollama'
+            ? `Local embeddings: ${ollamaCfg.embedModel} @ ${ollamaCfg.baseUrl}`
+            : `Optional (set LLM_PROVIDER=ollama or EMBEDDING_PROVIDER=ollama in .env)`,
         description:
           'Runs Orchestra AI agents and embeddings against self-hosted local models via Ollama (/api/chat + /api/embed) when self-hosting locally or via Docker.',
         capabilities: ['Offline Local Inference', 'JSON Format Mode', 'Local Embeddings'],
@@ -472,6 +476,7 @@ export function createApiRouter(): express.Router {
       includeRagDefault: boolean;
       notifyOnComplete: boolean;
       notifyOnFailure: boolean;
+      modelRouting: UserSettings['modelRouting'];
     }>;
 
     const current = getUserSettings(req.user!.id);
@@ -488,6 +493,7 @@ export function createApiRouter(): express.Router {
       includeRagDefault: body.includeRagDefault ?? current.includeRagDefault,
       notifyOnComplete: body.notifyOnComplete ?? current.notifyOnComplete,
       notifyOnFailure: body.notifyOnFailure ?? current.notifyOnFailure,
+      modelRouting: normalizeModelRouting(body.modelRouting, current.modelRouting),
     };
 
     const now = new Date().toISOString();
@@ -496,7 +502,7 @@ export function createApiRouter(): express.Router {
       UPDATE user_settings
       SET default_mode = ?, max_retries = ?, groundedness_threshold = ?, citation_style = ?,
           report_tone = ?, include_web_default = ?, include_rag_default = ?,
-          notify_on_complete = ?, notify_on_failure = ?, updated_at = ?
+          notify_on_complete = ?, notify_on_failure = ?, model_routing_json = ?, updated_at = ?
       WHERE user_id = ?
     `).run(
       updated.defaultMode,
@@ -508,6 +514,7 @@ export function createApiRouter(): express.Router {
       updated.includeRagDefault ? 1 : 0,
       updated.notifyOnComplete ? 1 : 0,
       updated.notifyOnFailure ? 1 : 0,
+      JSON.stringify(updated.modelRouting),
       now,
       req.user!.id
     );

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Save, Trash2 } from 'lucide-react';
 import { apiClient } from '../services/apiClient';
-import type { User, UserSettings } from '../types/research';
+import { GEMINI_MODEL_OPTIONS, type AgentModelRouting, type User, type UserSettings } from '../types/research';
 
 interface SettingsViewProps {
   user: User;
@@ -34,6 +34,12 @@ export function SettingsView({
       includeRagDefault: true,
       notifyOnComplete: true,
       notifyOnFailure: true,
+      modelRouting: {
+        planner: 'gemini-4-hydrogen', researcher: 'gemini-3.8-flash', evidenceExtractor: 'gemini-3.6-flash',
+        factChecker: 'gemini-4-hydrogen', sourceCredibility: 'gemini-3.5-flash-lite', contradictionChecker: 'gemini-4-hydrogen',
+        summarizer: 'gemini-3.1-flash-lite', writer: 'gemini-3.8-flash', groundednessChecker: 'gemini-4-hydrogen',
+        qualityEvaluator: 'gemini-3.6-flash',
+      },
       updatedAt: new Date().toISOString(),
     }
   );
@@ -306,6 +312,36 @@ export function SettingsView({
               className="w-full accent-blue-700 mt-2"
             />
           </div>
+        </div>
+
+
+        <div className="pt-5 border-t border-slate-100 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Per-Agent Gemini Model Routing</h3>
+            <p className="mt-1 text-xs text-slate-500">All Gemini agents share GEMINI_API_KEY. Choose a primary model for each role; quota-aware fallback models are tried automatically.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {([
+              ['planner', 'Main Planner'], ['researcher', 'Research Agents'],
+              ['evidenceExtractor', 'Evidence Extraction'], ['factChecker', 'Fact Checker'],
+              ['sourceCredibility', 'Source Credibility'], ['contradictionChecker', 'Contradiction Checker'],
+              ['summarizer', 'Summarizer'], ['writer', 'Writer Agent'],
+              ['groundednessChecker', 'Groundedness Checker'], ['qualityEvaluator', 'Quality Evaluator'],
+            ] as Array<[keyof AgentModelRouting, string]>).map(([role, label]) => (
+              <div key={role}>
+                <label htmlFor={`model-${role}`} className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
+                <select
+                  id={`model-${role}`}
+                  value={form.modelRouting[role]}
+                  onChange={(e) => setForm({ ...form, modelRouting: { ...form.modelRouting, [role]: e.target.value as AgentModelRouting[typeof role] } })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white"
+                >
+                  {GEMINI_MODEL_OPTIONS.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">Fallbacks activate for quota, rate-limit, unavailable-model and server errors. Invalid request or schema errors remain visible.</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
