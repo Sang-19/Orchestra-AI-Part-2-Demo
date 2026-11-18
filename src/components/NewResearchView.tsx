@@ -292,7 +292,7 @@ export function NewResearchView({
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white text-sm font-medium transition-colors whitespace-nowrap"
           >
             <Play className="w-4 h-4" />
-            <span>{submitting ? 'Generating Research Plan...' : 'Generate Research Plan'}</span>
+            <span>{submitting ? 'Starting Research...' : 'Generate Research Plan'}</span>
           </button>
         </div>
       </form>
