@@ -1,4 +1,5 @@
 import { generateSearchGroundedFindings, hasGeminiKey } from '../ai/geminiClient';
+import { getActiveLLMProvider } from '../ai/modelRouter';
 import { sanitizeUntrustedText } from './stateMachine';
 
 export interface WebSearchHit {
@@ -75,7 +76,7 @@ export async function searchWeb(params: {
     }
   }
 
-  if (hits.length === 0 && hasGeminiKey()) {
+  if (hits.length === 0 && hasGeminiKey() && getActiveLLMProvider() !== 'ollama') {
     const grounded = await generateSearchGroundedFindings({
       query: params.query,
       objective: params.objective,
