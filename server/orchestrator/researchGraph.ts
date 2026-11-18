@@ -23,6 +23,7 @@ import {
   OrchestraStateAnnotation,
   type HumanApprovalResumePayload,
   type OrchestraGraphState,
+  createExecutionCycle,
   type OrchestraGraphUpdate,
   type QualityRouteAction,
   type SubtopicResearchTaskInput,
@@ -299,6 +300,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       status: 'planning',
       currentStep: 'planner',
       completedAgents: ['input_validation'],
+      executionCycle: createExecutionCycle(1, 'planner', 'planning', ['input_validation']),
     };
   };
 
@@ -350,6 +352,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       currentStep: 'human_approval',
       approvalDecision: 'pending',
       completedAgents: ['planner'],
+      executionCycle: createExecutionCycle(state.retryCount + 1, 'human_approval', 'awaiting_approval', ['input_validation', 'planner']),
     };
   };
 
@@ -430,6 +433,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         status: 'running',
         currentStep: 'research_coordinator',
         completedAgents: ['human_approval'],
+        executionCycle: createExecutionCycle(state.retryCount + 1, 'research_coordinator', 'running', ['input_validation', 'planner', 'human_approval']),
       },
     });
   };
@@ -459,6 +463,7 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
       status: 'running',
       currentStep: 'researcher',
       completedAgents: ['research_coordinator'],
+      executionCycle: createExecutionCycle(state.retryCount + 1, 'researcher', 'running', [...(state.executionCycle?.completedAgents ?? state.completedAgents), 'research_coordinator']),
     };
   };
 
@@ -523,7 +528,6 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         return {
           sources: result.sources,
           researchGaps: result.gaps,
-          completedAgents: ['researcher'],
         };
       } catch (err) {
         // Isolate individual branch failures so sibling parallel subtopics complete safely
@@ -898,12 +902,12 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         goto: 'writer',
         update: {
           quality,
-          retryCount: state.retryCount + 1,
           rewriteInstructions: route.rewriteInstructions,
           routeAction: route.action,
           status: 'running',
           currentStep: 'writer',
-          completedAgents: ['quality_evaluator'],
+          completedAgents: [...state.completedAgents, 'quality_evaluator'],
+          executionCycle: createExecutionCycle(state.retryCount + 1, 'writer', 'running', [...(state.executionCycle?.completedAgents ?? state.completedAgents), 'quality_evaluator']),
         },
       });
     }
@@ -924,12 +928,12 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         goto: 'contradiction_checker',
         update: {
           quality,
-          retryCount: state.retryCount + 1,
           contradictionRechecked: true,
           routeAction: route.action,
           status: 'running',
           currentStep: 'contradiction_checker',
-          completedAgents: ['quality_evaluator'],
+          completedAgents: [...state.completedAgents, 'quality_evaluator'],
+          executionCycle: createExecutionCycle(state.retryCount + 1, 'contradiction_checker', 'running', [...(state.executionCycle?.completedAgents ?? state.completedAgents), 'quality_evaluator']),
         },
       });
     }
@@ -952,11 +956,12 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         update: {
           quality,
           retryCount: state.retryCount + 1,
+          executionCycle: createExecutionCycle(state.retryCount + 2, 'research_coordinator', 'running'),
+          completedAgents: [],
           extraQueries: route.extraQueries,
           routeAction: route.action,
           status: 'running',
           currentStep: 'research_coordinator',
-          completedAgents: ['quality_evaluator'],
         },
       });
     }
@@ -980,7 +985,8 @@ export function createOrchestraResearchGraph(options: CreateResearchGraphOptions
         routeAction: 'complete',
         status: route.finalStatus,
         currentStep: 'quality_evaluator',
-        completedAgents: ['quality_evaluator'],
+        completedAgents: [...state.completedAgents, 'quality_evaluator'],
+        executionCycle: createExecutionCycle(state.retryCount + 1, 'quality_evaluator', route.finalStatus, [...(state.executionCycle?.completedAgents ?? state.completedAgents), 'quality_evaluator']),
       },
     });
   };

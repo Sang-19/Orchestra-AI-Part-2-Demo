@@ -181,10 +181,20 @@ export interface ResearchReport {
   generatedAt: string;
 }
 
+export interface ExecutionCycleState {
+  cycleNumber: number;
+  activeAgent: AgentId | null;
+  completedAgents: AgentId[];
+  failedAgents: AgentId[];
+  status: ResearchStatus;
+}
+
 export interface WorkflowCheckpoint {
   sessionId: string;
   currentStep: AgentId;
   completedAgents: AgentId[];
+  /** Current-cycle view; optional for legacy persisted checkpoints. */
+  executionCycle?: ExecutionCycleState;
   retryCount: number;
   maxRetries: number;
   plan: ResearchPlan | null;
@@ -210,6 +220,7 @@ export interface ResearchSession {
   maxRetries: number;
   retryCount: number;
   currentAgent: AgentId | null;
+  executionCycle?: ExecutionCycleState;
   plan: ResearchPlan | null;
   checkpoint: WorkflowCheckpoint | null;
   report: ResearchReport | null;
@@ -226,6 +237,8 @@ export interface ExecutionEvent {
   id: string;
   sessionId: string;
   seq: number;
+  /** Cycle association; omitted by legacy persisted events. */
+  cycleNumber?: number;
   eventType:
     | 'execution_started'
     | 'agent_started'

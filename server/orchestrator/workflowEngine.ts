@@ -50,14 +50,21 @@ function appendExecutionEvent(params: GraphEventPayload): ExecutionEvent {
     .prepare(`SELECT COALESCE(MAX(seq), 0) as maxSeq FROM execution_events WHERE session_id = ?`)
     .get(params.sessionId) as { maxSeq: number };
 
+  const payload = params.payload ?? null;
+  const cpRow = db.prepare("SELECT checkpoint_json FROM research_sessions WHERE id = ?").get(params.sessionId) as { checkpoint_json?: string } | undefined;
+  let cycleNumber = 1;
+  if (cpRow?.checkpoint_json) { try { const cp = JSON.parse(cpRow.checkpoint_json) as WorkflowCheckpoint; cycleNumber = cp.executionCycle?.cycleNumber ?? cp.retryCount + 1; } catch { /* tolerate legacy checkpoint */ } }
+  if (params.eventType === 'research_retry' && payload?.routeAction === 'retry_research') cycleNumber += 1;
+
   const evt: ExecutionEvent = {
     id: `evt-${crypto.randomUUID()}`,
     sessionId: params.sessionId,
     seq: row.maxSeq + 1,
+    cycleNumber,
     eventType: params.eventType,
     agentId: params.agentId,
     message: params.message,
-    payload: params.payload ?? null,
+    payload,
     createdAt: now,
   };
 
@@ -219,6 +226,7 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
     maxRetries: Number(row.max_retries),
     retryCount: Number(row.retry_count),
     currentAgent: (row.current_agent as AgentId | null) ?? null,
+    executionCycle: row.checkpoint_json ? (JSON.parse(String(row.checkpoint_json)) as WorkflowCheckpoint).executionCycle : undefined,
     plan: row.plan_json ? (JSON.parse(String(row.plan_json)) as ResearchPlan) : null,
     checkpoint: row.checkpoint_json
       ? (JSON.parse(String(row.checkpoint_json)) as WorkflowCheckpoint)
@@ -244,93 +252,39 @@ export function mapSessionRow(row: Record<string, unknown>): ResearchSession {
  * Streams a LangGraph invocation or resumption while projecting each state transition
  * into `research_sessions` for real-time API & frontend visibility.
  */
-async function runGraphStreamAndSync(params: {
-  sessionId: string;
-  userId: string;
-  input: Record<string, unknown> | Command | null;
-}): Promise<void> {
+async function runGraphStreamAndSync(params: { sessionId: string; userId: string; input: Record<string, unknown> | Command | null }): Promise<void> {
   const graph = buildWorkflowGraph();
   const config = makeThreadConfig(params.sessionId, params.userId);
   let latestState: OrchestraGraphState | null = null;
-
   try {
     await runWithModelRouting(getUserSettings(params.userId).modelRouting, async () => {
-    const stream = await graph.stream(params.input as never, {
-      ...config,
-      streamMode: 'values',
-    });
-
-    for await (const snapshot of stream) {
-      latestState = snapshot as unknown as OrchestraGraphState;
-      if (latestState && latestState.sessionId) {
-        const projected = projectGraphStateToCheckpoint(latestState);
-        saveSessionProjection({
-          sessionId: params.sessionId,
-          status: latestState.status,
-          checkpoint: projected,
-          errorMessage: latestState.errorMessage,
-        });
+      const stream = await graph.stream(params.input as never, { ...config, streamMode: 'values' });
+      for await (const snapshot of stream) {
+        latestState = snapshot as unknown as OrchestraGraphState;
+        if (latestState?.sessionId) saveSessionProjection({ sessionId: params.sessionId, status: latestState.status, checkpoint: projectGraphStateToCheckpoint(latestState), errorMessage: latestState.errorMessage });
       }
-    }
-
-    const finalSnapshot = await graph.getState(config);
-    const finalValues = (finalSnapshot.values as OrchestraGraphState | undefined) ?? latestState;
-    if (!finalValues) return;
-
-    const projected = projectGraphStateToCheckpoint(finalValues);
-    const isPausedAtInterrupt =
-      Array.isArray(finalSnapshot.next) && finalSnapshot.next.includes('human_approval');
-
-    if (isPausedAtInterrupt) {
-      saveSessionProjection({
-        sessionId: params.sessionId,
-        status: 'awaiting_approval',
-        checkpoint: {
-          ...projected,
-          currentStep: 'human_approval',
-        },
-        errorMessage: null,
-      });
-      return;
-    }
-
-    const terminalStatus: ResearchStatus =
-      finalValues.status === 'rejected' ||
-      finalValues.status === 'completed' ||
-      finalValues.status === 'completed_with_warnings' ||
-      finalValues.status === 'failed'
-        ? finalValues.status
-        : 'completed';
-
-    saveSessionProjection({
-      sessionId: params.sessionId,
-      status: terminalStatus,
-      checkpoint: projected,
-      completedAt: new Date().toISOString(),
-      errorMessage: finalValues.errorMessage,
-    });
+      const finalSnapshot = await graph.getState(config);
+      const finalValues = (finalSnapshot.values as OrchestraGraphState | undefined) ?? latestState;
+      if (!finalValues) return;
+      const projected = projectGraphStateToCheckpoint(finalValues);
+      const pendingNodes = Array.isArray(finalSnapshot.next) ? finalSnapshot.next : [];
+      if (pendingNodes.includes('human_approval')) {
+        saveSessionProjection({ sessionId: params.sessionId, status: 'awaiting_approval', checkpoint: { ...projected, currentStep: 'human_approval' }, errorMessage: null });
+        return;
+      }
+      const terminal = pendingNodes.length === 0 && ['rejected','completed','completed_with_warnings','failed'].includes(finalValues.status);
+      if (!terminal) {
+        saveSessionProjection({ sessionId: params.sessionId, status: finalValues.status === 'failed' ? 'failed' : 'running', checkpoint: projected, errorMessage: finalValues.errorMessage ?? (pendingNodes.length ? `Workflow has pending graph nodes: ${pendingNodes.join(', ')}` : 'Workflow stream ended before a terminal graph state was recorded.') });
+        return;
+      }
+      saveSessionProjection({ sessionId: params.sessionId, status: finalValues.status, checkpoint: projected, completedAt: new Date().toISOString(), errorMessage: finalValues.errorMessage });
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected LangGraph execution error.';
     const current = getResearchSession(params.sessionId, params.userId);
-    const checkpoint =
-      (latestState ? projectGraphStateToCheckpoint(latestState) : current?.checkpoint) ??
-      createInitialCheckpoint(params.sessionId, current?.maxRetries ?? 2);
-
-    saveSessionProjection({
-      sessionId: params.sessionId,
-      status: 'failed',
-      checkpoint,
-      completedAt: new Date().toISOString(),
-      errorMessage: message,
-    });
-
-    appendExecutionEvent({
-      sessionId: params.sessionId,
-      eventType: 'execution_failed',
-      agentId: checkpoint.currentStep,
-      message,
-    });
+    const checkpoint = (latestState ? projectGraphStateToCheckpoint(latestState) : current?.checkpoint) ?? createInitialCheckpoint(params.sessionId, current?.maxRetries ?? 2);
+    saveSessionProjection({ sessionId: params.sessionId, status: 'failed', checkpoint, completedAt: new Date().toISOString(), errorMessage: message });
+    appendExecutionEvent({ sessionId: params.sessionId, eventType: 'execution_failed', agentId: checkpoint.currentStep, message });
   }
 }
 
