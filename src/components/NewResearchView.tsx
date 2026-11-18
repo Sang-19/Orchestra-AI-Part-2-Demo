@@ -134,7 +134,7 @@ export function NewResearchView({
             </button>
             <button type="button" onClick={() => setProvider('ollama')} aria-pressed={provider === 'ollama'} className={`p-4 rounded-lg border text-left transition-colors ${provider === 'ollama' ? 'border-emerald-700 bg-emerald-50/50 ring-1 ring-emerald-700' : 'border-slate-200 hover:border-slate-300'}`}>
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Cpu className="w-4 h-4 text-emerald-700" /> Ollama (Local)</div>
-              <p className="mt-1 text-xs text-slate-500">Run agent reasoning with the model configured on your Ollama server.</p>
+              <p className="mt-1 text-xs text-slate-500">Run agent reasoning locally. Live web discovery still requires Tavily when Ollama is selected.</p>
             </button>
           </div>
           {provider === 'ollama' && <p className="mt-2 text-xs text-amber-700">Make sure Ollama is running and OLLAMA_BASE_URL / OLLAMA_MODEL are configured on the Orchestra server.</p>}
