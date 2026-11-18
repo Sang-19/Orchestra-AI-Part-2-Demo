@@ -19,6 +19,7 @@ RUN bun install --frozen-lockfile --production
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server ./server
+COPY --from=builder /app/src/types ./src/types
 COPY --from=builder /app/server.ts ./server.ts
 
 RUN mkdir -p /app/data && chown -R bun:bun /app
