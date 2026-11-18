@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { withTimeout } from '../ai/requestTimeout';
 import { ThinkingLevel, Type, type Schema } from '@google/genai';
 import { generateStructuredJson } from '../ai/geminiClient';
 import {
@@ -589,7 +590,8 @@ export async function runGroundednessCheckerAgent(params: {
     return deterministicCheck;
   }
 
-  const aiResult = await generateStructuredJson<GroundednessResult>({
+    aiResult = await withTimeout(
+      generateStructuredJson<GroundednessResult>({
     systemInstruction:
       'You are the Groundedness Checker Agent. Audit the generated report against verified claims and source citations. Flag any unsupported statements or invalid citation numbers. Never pass a report whose factual grounding falls below the threshold.',
     prompt: `Threshold: ${params.threshold}
@@ -602,8 +604,20 @@ Report Markdown:
 ${params.report.markdownContent.slice(0, 7000)}`,
     schema: GROUNDEDNESS_SCHEMA,
     modelRole: 'groundednessChecker',
-    thinkingLevel: ThinkingLevel.MEDIUM,
-  });
+      thinkingLevel: ThinkingLevel.MEDIUM,
+      }),
+      timeoutMs,
+      'Groundedness Checker AI audit'
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== 'OperationTimeoutError') throw error;
+    return {
+      ...deterministicCheck,
+      passed: false,
+      validationStatus: 'incomplete',
+      summary: `AI groundedness audit timed out after ${Math.round(timeoutMs / 1000)} seconds. Deterministic citation checks were retained; manual review is required.`,
+    };
+  }
 
   // Enforce strict invariant: never mark failed citation or below-threshold score as passed
   const score = Math.max(0, Math.min(1, Number(aiResult.score.toFixed(2))));
