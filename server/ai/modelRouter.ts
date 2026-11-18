@@ -60,8 +60,8 @@ export function isModelFallbackWorthy(error: unknown): boolean {
   const err = error as { status?: number; statusCode?: number; code?: number | string; message?: string };
   const status = Number(err?.status ?? err?.statusCode ?? err?.code);
   const message = String(err?.message ?? error ?? '').toLowerCase();
-  return status === 404 || status === 429 || status >= 500 ||
-    /resource_exhausted|quota exceeded|rate.?limit|too many requests|model not found|not found/.test(message);
+  return status === 404 || status === 429 || (status >= 500 && status <= 599) ||
+    /resource_exhausted|quota exceeded|rate.?limit|too many requests|model not found/.test(message);
 }
 
 export function isRetryableServerError(error: unknown): boolean {
