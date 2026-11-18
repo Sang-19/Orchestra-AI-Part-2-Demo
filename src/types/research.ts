@@ -58,7 +58,6 @@ export interface AgentModelRouting {
   writer: GeminiModelId;
   groundednessChecker: GeminiModelId;
   qualityEvaluator: GeminiModelId;
-  searchGrounding: GeminiModelId;
 }
 
 export interface UserSettings {
