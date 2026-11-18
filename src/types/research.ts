@@ -33,6 +33,34 @@ export interface User {
   createdAt: string;
 }
 
+
+export const GEMINI_MODEL_OPTIONS = [
+  { value: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen' },
+  { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+  { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+  { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
+  { value: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite' },
+  { value: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
+] as const;
+
+export type GeminiModelId = (typeof GEMINI_MODEL_OPTIONS)[number]['value'];
+
+export interface AgentModelRouting {
+  planner: GeminiModelId;
+  researcher: GeminiModelId;
+  evidenceExtractor: GeminiModelId;
+  factChecker: GeminiModelId;
+  sourceCredibility: GeminiModelId;
+  contradictionChecker: GeminiModelId;
+  summarizer: GeminiModelId;
+  writer: GeminiModelId;
+  groundednessChecker: GeminiModelId;
+  qualityEvaluator: GeminiModelId;
+  searchGrounding: GeminiModelId;
+}
+
 export interface UserSettings {
   userId: string;
   defaultMode: ResearchMode;
@@ -44,6 +72,7 @@ export interface UserSettings {
   includeRagDefault: boolean;
   notifyOnComplete: boolean;
   notifyOnFailure: boolean;
+  modelRouting: AgentModelRouting;
   updatedAt: string;
 }
 
