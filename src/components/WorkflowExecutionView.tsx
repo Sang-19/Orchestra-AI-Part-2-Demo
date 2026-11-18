@@ -7,6 +7,9 @@ import {
   FileCheck2,
   Loader2,
   Play,
+  Pause,
+  Square,
+  Trash2,
   RotateCcw,
   XCircle,
 } from 'lucide-react';
@@ -172,6 +175,32 @@ export function WorkflowExecutionView({
     }
   };
 
+  const handlePause = async () => {
+    if (!session) return;
+    setActionLoading(true); setError(null);
+    try { const res = await apiClient.pauseResearch(session.id); setSession(res.session); onSessionUpdated(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Failed to pause workflow.'); }
+    finally { setActionLoading(false); }
+  };
+
+  const handleStop = async () => {
+    if (!session) return;
+    if (!window.confirm('Stop this research workflow? It will not resume unless you explicitly start a new workflow.')) return;
+    setActionLoading(true); setError(null);
+    try { const res = await apiClient.stopResearch(session.id); setSession(res.session); onSessionUpdated(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Failed to stop workflow.'); }
+    finally { setActionLoading(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!session) return;
+    if (!window.confirm('Permanently delete this research session, its report, events, messages, and saved checkpoint? This cannot be undone.')) return;
+    setActionLoading(true); setError(null);
+    try { await apiClient.deleteResearchSession(session.id); onSelectSession(''); onSessionUpdated(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete workflow.'); }
+    finally { setActionLoading(false); }
+  };
+
   const handleResume = async () => {
     if (!session) return;
     setActionLoading(true);
@@ -272,6 +301,26 @@ export function WorkflowExecutionView({
             </select>
           )}
 
+          {session.status === 'running' && (
+            <>
+              <button type="button" onClick={handlePause} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
+                <Pause className="w-3.5 h-3.5" /> Pause
+              </button>
+              <button type="button" onClick={handleStop} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
+                <Square className="w-3.5 h-3.5" /> Stop
+              </button>
+            </>
+          )}
+          {session.status === 'paused' && (
+            <button type="button" onClick={handleStop} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
+              <Square className="w-3.5 h-3.5" /> Stop
+            </button>
+          )}
+          {['completed', 'completed_with_warnings', 'failed', 'stopped', 'rejected', 'paused'].includes(session.status) && (
+            <button type="button" onClick={handleDelete} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+          )}
           {(session.status === 'paused' || session.status === 'failed') && (
             <button
               type="button"
