@@ -366,7 +366,9 @@ export async function createAndPlanResearch(params: {
   );
 
   // Execute LangGraph from START until it pauses at the `human_approval` interrupt()
-  await runGraphStreamAndSync({
+  activeRuns.add(sessionId);
+  try {
+    await runGraphStreamAndSync({
     sessionId,
     userId: params.userId,
     provider,
@@ -383,7 +385,10 @@ export async function createAndPlanResearch(params: {
       reportTone: settings.reportTone,
       citationStyle: settings.citationStyle,
     },
-  });
+    });
+  } finally {
+    activeRuns.delete(sessionId);
+  }
 
   return getResearchSession(sessionId, params.userId)!;
 }
@@ -581,8 +586,8 @@ export async function deleteResearchSessionAndThread(
 export function pauseResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
-  if (session.status !== 'running' || !activeRuns.has(session.id)) {
-    throw new Error('Only an actively running workflow can be paused.');
+  if (!['running', 'planning'].includes(session.status) || !activeRuns.has(session.id)) {
+    throw new Error('Only an actively executing workflow can be paused.');
   }
   pendingRunControls.set(session.id, 'pause');
   return session;
@@ -592,7 +597,7 @@ export function pauseResearchExecution(params: { sessionId: string; userId: stri
 export function stopResearchExecution(params: { sessionId: string; userId: string }): ResearchSession {
   const session = getResearchSession(params.sessionId, params.userId);
   if (!session) throw new Error('Research session not found.');
-  if (session.status === 'running' && activeRuns.has(session.id)) {
+  if (['running', 'planning'].includes(session.status) && activeRuns.has(session.id)) {
     pendingRunControls.set(session.id, 'stop');
     return session;
   }
