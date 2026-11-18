@@ -316,7 +316,7 @@ export function WorkflowExecutionView({
               <Square className="w-3.5 h-3.5" /> Stop
             </button>
           )}
-          {['completed', 'completed_with_warnings', 'failed', 'stopped', 'rejected', 'paused'].includes(session.status) && (
+          {['completed', 'completed_with_warnings', 'failed', 'stopped', 'rejected', 'paused', 'awaiting_approval'].includes(session.status) && (
             <button type="button" onClick={handleDelete} disabled={actionLoading} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-60 text-xs font-medium whitespace-nowrap">
               <Trash2 className="w-3.5 h-3.5" /> Delete
             </button>
