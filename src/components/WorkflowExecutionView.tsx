@@ -230,7 +230,9 @@ export function WorkflowExecutionView({
     );
   }
 
-  const completedSet = new Set(session.checkpoint?.completedAgents ?? []);
+  const currentCycle = session.executionCycle ?? session.checkpoint?.executionCycle;
+  const completedSet = new Set(currentCycle?.completedAgents ?? session.checkpoint?.completedAgents ?? []);
+  const failedSet = new Set(currentCycle?.failedAgents ?? []);
   const sources = session.checkpoint?.sources ?? [];
   const claims = session.checkpoint?.claims ?? [];
   const canViewReport =
@@ -248,7 +250,7 @@ export function WorkflowExecutionView({
             <span className="font-mono tabular-nums">ID: {session.id.slice(0, 14)}</span>
             <span aria-hidden="true">·</span>
             <span className="tabular-nums">
-              Retries: {session.retryCount}/{session.maxRetries}
+              Adaptive retries: {session.retryCount}/{session.maxRetries} · Cycle {currentCycle?.cycleNumber ?? session.retryCount + 1}
             </span>
           </div>
           <h1 className="mt-1.5 text-xl font-semibold text-slate-900">{session.question}</h1>
@@ -437,12 +439,13 @@ export function WorkflowExecutionView({
           <ol className="space-y-3">
             {AGENT_PIPELINE.map((stage) => {
               const isDone = completedSet.has(stage.id);
+              const isFailed = failedSet.has(stage.id);
               const isCurrent =
                 session.currentAgent === stage.id &&
                 (session.status === 'running' ||
                   session.status === 'planning' ||
                   session.status === 'awaiting_approval');
-              const isFailedHere = session.status === 'failed' && session.currentAgent === stage.id;
+              const isFailedHere = isFailed || (session.status === 'failed' && session.currentAgent === stage.id);
 
               return (
                 <li key={stage.id} className="flex items-start gap-3">
@@ -491,11 +494,13 @@ export function WorkflowExecutionView({
               {events.length === 0 ? (
                 <div className="p-6 text-sm text-slate-500">Waiting for backend workflow events...</div>
               ) : (
-                events.map((evt) => (
-                  <div key={evt.id} className="px-6 py-3 flex items-start justify-between gap-4">
+                events.map((evt, index) => (
+                  <React.Fragment key={evt.id}>
+                  {(index === 0 || evt.cycleNumber !== events[index - 1]?.cycleNumber) && <div className="px-6 py-2 bg-slate-50 border-y border-slate-200 text-xs font-semibold text-slate-600">Cycle {evt.cycleNumber ?? 1} · {(evt.cycleNumber ?? 1) === 1 ? 'Initial execution' : 'Adaptive retry'}</div>}
+                  <div className="px-6 py-3 flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-xs text-slate-500 font-mono">
-                        #{evt.seq} · {evt.eventType}
+                        #{evt.seq} · {evt.eventType} · Cycle {evt.cycleNumber ?? 1}
                         {evt.agentId ? ` · ${evt.agentId}` : ''}
                       </div>
                       <div className="mt-0.5 text-sm text-slate-800">{evt.message}</div>
@@ -504,6 +509,7 @@ export function WorkflowExecutionView({
                       {new Date(evt.createdAt).toLocaleTimeString()}
                     </span>
                   </div>
+                  </React.Fragment>
                 ))
               )}
             </div>
